@@ -23,9 +23,14 @@ id -u "$SERVICE_USER" >/dev/null 2>&1 || useradd --system --home "$INSTALL_DIR" 
 usermod -aG gpio "$SERVICE_USER" 2>/dev/null || true
 
 mkdir -p "$INSTALL_DIR"
+# config*.toml examples (config-ascom-sim.toml, config-indi.toml) are dev/
+# test references, not meant to be read by the deployed service -- excluded
+# so they don't sit in $INSTALL_DIR looking like real config (confirmed
+# confusing in practice: config-indi.toml's cedar.backend = "mock" looked
+# like a live setting even though it's unused).
 rsync -a --delete \
     --exclude='.venv' --exclude='.git' --exclude='__pycache__' --exclude='*.egg-info' \
-    --exclude='config.toml' --exclude='config-ascom-sim.toml' \
+    --exclude='config.toml' --exclude='config-ascom-sim.toml' --exclude='config-indi.toml' \
     "$REPO_DIR"/ "$INSTALL_DIR"/
 
 python3 -m venv "$INSTALL_DIR/.venv"
