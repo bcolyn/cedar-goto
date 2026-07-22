@@ -80,15 +80,29 @@ class ClosedLoopTelescopeBackend:
         if member.name in _SLEW_MEMBERS:
             return await self._start_slew(params, wait=(member.name == "SlewToCoordinates"))
         if member.name == "AbortSlew":
+            # abort() alone is only a cooperative signal -- confirmed live
+            # that a task blocked inside a solve-wait RPC stays in
+            # AWAIT_SOLVE indefinitely even after this fires unless actually
+            # cancelled. This didn't hang AbortSlew itself (it never awaited
+            # the task), but it meant Abort silently failed to really stop
+            # the loop.
             if self._loop_active():
                 self._current_loop.abort()
+                self._task.cancel()
+                await asyncio.gather(self._task, return_exceptions=True)
             return await self._inner.put(member, params)
         if member.name == "Park":
             # Parking mid-slew must not race the loop's next slew_to/sync_to
             # -- stop it first and wait for the background task to actually
-            # exit before handing off to the mount.
+            # exit before handing off to the mount. abort() alone is only a
+            # cooperative signal the loop checks between its own awaits --
+            # confirmed live that it does NOT interrupt a task already
+            # blocked inside a solve-wait RPC (AWAIT_SOLVE with no solve
+            # forthcoming), which hung this handler indefinitely. cancel()
+            # forces it.
             if self._loop_active():
                 self._current_loop.abort()
+                self._task.cancel()
                 await asyncio.gather(self._task, return_exceptions=True)
             return await self._inner.put(member, params)
         return await self._inner.put(member, params)
@@ -106,7 +120,10 @@ class ClosedLoopTelescopeBackend:
         if self._loop_active():
             # A new slew supersedes whatever's in progress -- abort it and
             # wait for the task to actually stop before starting the next.
+            # Same hang risk as Park() above: abort() alone can't interrupt
+            # a task blocked inside a solve-wait RPC, so force it.
             self._current_loop.abort()
+            self._task.cancel()
             await asyncio.gather(self._task, return_exceptions=True)
 
         self._current_loop = ClosedLoopSlew(self._mount, self._cedar, self._loop_config, self._acceptance)
