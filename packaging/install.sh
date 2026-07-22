@@ -31,6 +31,14 @@ rsync -a --delete \
 python3 -m venv "$INSTALL_DIR/.venv"
 "$INSTALL_DIR/.venv/bin/pip" install --upgrade pip
 "$INSTALL_DIR/.venv/bin/pip" install "$INSTALL_DIR"
+# pyindi-client (for [mount].backend = "indi", indi-refactor.md) ships
+# prebuilt wheels and needs no compiler -- but it declares dbus-python as a
+# hard dependency it doesn't actually import at runtime (confirmed by
+# spike), and dbus-python has no wheels anywhere, forcing a meson/
+# libdbus-1-dev source build we don't want. --no-deps skips that (and the
+# also-unused requests/bottle deps); installed unconditionally since it's a
+# small, harmless extra even when backend = "alpyca"/"mock".
+"$INSTALL_DIR/.venv/bin/pip" install --no-deps pyindi-client
 # For the optional GPIO buzzer (DESIGN.md §7), instead run:
 #   "$INSTALL_DIR/.venv/bin/pip" install "$INSTALL_DIR[buzzer]"
 
