@@ -3,9 +3,16 @@
 Verified against a live Cedar-Box (cedar_server_version 0.17.0): GetFrame
 connects and round-trips real FrameResult messages. Note cedar-server binds
 gRPC on the *same port as its web UI* (tonic's GrpcWebLayer combines them,
-default port 80) -- there is no separate dedicated gRPC port. Daytime-only
-testing so far (no accepted plate_solution yet -- daylight_mode/TOO_FEW_STARS),
-so the actual solve path is still unverified end-to-end.
+default port 80) -- there is no separate dedicated gRPC port.
+
+`stream_solves()` long-polls the unary `GetFrame`, not the server-streaming
+`GetFrames` the .proto also declares -- confirmed live (first real GOTO
+through a real mount + real cedar-server) that this cedar-server build
+returns UNIMPLEMENTED for `GetFrames`, crashing the closed loop mid-slew.
+`GetFrame` supports the same "block until something new" semantics via
+`prev_solution_id` (see cedar.proto's FrameRequest), so this preserves
+push-like behavior -- one blocking RPC per new solution, not a busy loop --
+without needing the missing streaming method.
 """
 from __future__ import annotations
 
@@ -49,8 +56,11 @@ class CedarGrpcClient(SolveSource):
         await self._channel.close()
 
     async def stream_solves(self) -> AsyncIterator[SolveResult]:
-        request = cedar_pb2.FrameRequest(non_blocking=False)
-        async for frame in self._stub.GetFrames(request):
+        prev_solution_id: int | None = None
+        while True:
+            kwargs = {"prev_solution_id": prev_solution_id} if prev_solution_id is not None else {}
+            frame = await self._stub.GetFrame(cedar_pb2.FrameRequest(non_blocking=False, **kwargs))
+            prev_solution_id = frame.solution_id
             solve = _to_solve_result(frame)
             if solve is not None:
                 yield solve
