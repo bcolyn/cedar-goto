@@ -172,13 +172,19 @@ class ClosedLoopSlew:
 
     async def _await_fresh_accepted_solve(self) -> SolveResult | None:
         settle_complete_time = time.time()
-        deadline = time.monotonic() + self._config.solve_wait_timeout_s
-        async for solve in self._cedar.stream_solves():
-            self._check_abort()
-            if solve.capture_time_unix >= settle_complete_time and self._acceptance.accepts(solve):
-                return solve
-            if time.monotonic() > deadline:
-                return None
+        try:
+            async with asyncio.timeout(self._config.solve_wait_timeout_s):
+                async for solve in self._cedar.stream_solves():
+                    self._check_abort()
+                    if solve.capture_time_unix >= settle_complete_time and self._acceptance.accepts(solve):
+                        return solve
+        except TimeoutError:
+            # Checking a deadline only between yielded solves (the previous
+            # approach) is dead code if stream_solves() never yields at all
+            # (confirmed live: a capped/idle camera blocks forever inside a
+            # single GetFrame RPC, never reaching a per-iteration check).
+            # asyncio.timeout() cancels the wait even mid-RPC.
+            return None
         return None
 
     def _check_abort(self) -> None:
