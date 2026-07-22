@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+src/*.egg-info/
+build/
+dist/
+.idea/
+.claude/
+
+# Local-only design/planning docs -- kept on disk, not tracked (README.md
+# is the public-facing doc).
+/DESIGN.md
+/GOALS.md
+/indi-refactor.md

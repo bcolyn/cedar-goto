@@ -1,0 +1,40 @@
+# Real-hardware(-ish) test config: cedar-goto's mount client (alpyca)
+# pointed at the official ASCOM Remote Server's simulator, with cedar
+# mocked out (a MountEchoCedar echoes the real mount's own position as
+# ground truth -- no real cedar-server solving needed to exercise the real
+# mount plumbing). See DESIGN.md §3a/§11.
+# device_number: 0 = "Telescope Simulator for .NET", 1 = "ASCOM OmniSim
+# Telescope", 2 = "Simulator".
+
+[mount]
+address = "192.168.1.50:11111"     # your ASCOM Remote Server host:port
+device_number = 0
+backend = "alpyca"
+
+[cedar]
+backend = "mock"
+
+[server]
+bind = "0.0.0.0"
+alpaca_port = 11111
+discovery = true
+
+[loop]
+strategy = "offset"
+tolerance_arcmin = 1.0
+max_iterations = 3
+settle_ms = 1500
+final_sync = true
+
+[solve]
+min_matches = 10
+min_prob = 0.9
+max_p90_error_arcsec = 30
+reject_imu = true
+
+[position]
+source = "cedar_fallback_mount"
+max_solve_age_s = 5.0
+
+[buzzer]
+enabled = false

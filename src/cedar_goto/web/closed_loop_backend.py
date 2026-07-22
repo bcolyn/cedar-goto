@@ -1,0 +1,250 @@
+"""Phase 2 (DESIGN.md §5, §10): wraps a plain TelescopeBackend so
+SlewToCoordinates(Async) runs the closed loop instead of a bare proxy.
+
+Everything else -- Tracking, capability flags, park, etc. -- still proxies
+straight through to `inner`, unchanged from Phase 1 (DESIGN.md §3:
+"transparent proxy", intercept only the slew).
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+
+from cedar_goto.adapters.buzzer import Buzzer, NullBuzzer
+from cedar_goto.config import PositionSourceConfig
+from cedar_goto.core.coords import J2000, CelestialCoord
+from cedar_goto.core.loop import (
+    ClosedLoopSlew,
+    LoopConfigCore,
+    LoopState,
+    LoopStatus,
+    SlewAborted,
+    SlewTimedOut,
+)
+from cedar_goto.core.ports import MountControl, SolveSource
+from cedar_goto.core.solve import SolveAcceptance, SolveResult
+from cedar_goto.web.alpaca_spec import ALL_MEMBERS_BY_ACTION, Member
+from cedar_goto.web.backend import TelescopeBackend
+
+logger = logging.getLogger(__name__)
+
+_SLEW_MEMBERS = frozenset({"SlewToCoordinates", "SlewToCoordinatesAsync"})
+
+
+class SyncRefused(Exception):
+    """Raised by sync_to_cedar() when refusing for a reason more specific
+    than "nothing acceptable yet" -- currently just solve.is_plate_solve
+    being False (e.g. MountEchoCedar's loopback). Distinct from returning
+    None, which covers the routine "cedar hasn't produced a good solve
+    yet" case."""
+
+
+class ClosedLoopTelescopeBackend:
+    def __init__(
+        self,
+        inner: TelescopeBackend,
+        mount: MountControl,
+        cedar: SolveSource,
+        loop_config: LoopConfigCore,
+        acceptance: SolveAcceptance,
+        position_config: PositionSourceConfig,
+        buzzer: Buzzer | None = None,
+    ) -> None:
+        self._inner = inner
+        self._mount = mount
+        self._cedar = cedar
+        self._loop_config = loop_config
+        self._acceptance = acceptance
+        self._position_config = position_config
+        self._buzzer = buzzer if buzzer is not None else NullBuzzer()
+        self._task: asyncio.Task | None = None
+        self._current_loop: ClosedLoopSlew | None = None
+        self._last_status: LoopStatus | None = None
+
+    @property
+    def last_status(self) -> LoopStatus | None:
+        return self._last_status
+
+    async def get(self, member: Member):
+        if member.name == "Slewing":
+            return self._loop_active()
+        if member.name in ("RightAscension", "Declination") and self._position_config.source != "mount":
+            position = await self._cedar_position()
+            if position is not None:
+                ra_hours, dec_deg = position
+                return ra_hours if member.name == "RightAscension" else dec_deg
+        return await self._inner.get(member)
+
+    async def put(self, member: Member, params: dict):
+        if member.name in _SLEW_MEMBERS:
+            return await self._start_slew(params, wait=(member.name == "SlewToCoordinates"))
+        if member.name == "AbortSlew":
+            if self._loop_active():
+                self._current_loop.abort()
+            return await self._inner.put(member, params)
+        if member.name == "Park":
+            # Parking mid-slew must not race the loop's next slew_to/sync_to
+            # -- stop it first and wait for the background task to actually
+            # exit before handing off to the mount.
+            if self._loop_active():
+                self._current_loop.abort()
+                await asyncio.gather(self._task, return_exceptions=True)
+            return await self._inner.put(member, params)
+        return await self._inner.put(member, params)
+
+    async def query(self, member: Member, params: dict):
+        return await self._inner.query(member, params)
+
+    def _loop_active(self) -> bool:
+        return self._task is not None and not self._task.done()
+
+    async def _start_slew(self, params: dict, wait: bool):
+        target = CelestialCoord(
+            ra_deg=params["RightAscension"] * 15.0, dec_deg=params["Declination"], epoch=J2000
+        )
+        if self._loop_active():
+            # A new slew supersedes whatever's in progress -- abort it and
+            # wait for the task to actually stop before starting the next.
+            self._current_loop.abort()
+            await asyncio.gather(self._task, return_exceptions=True)
+
+        self._current_loop = ClosedLoopSlew(self._mount, self._cedar, self._loop_config, self._acceptance)
+        self._task = asyncio.create_task(self._run_loop(self._current_loop, target))
+        if wait:
+            await self._task
+        return None
+
+    async def _run_loop(self, loop: ClosedLoopSlew, target: CelestialCoord) -> None:
+        iteration = self._last_status.iteration if self._last_status else 0
+        try:
+            async for status in loop.run(target):
+                self._last_status = status
+                iteration = status.iteration
+                logger.info("closed-loop slew: %s", status)
+            if self._last_status is not None:
+                self._beep_for(self._last_status.state)
+        except SlewAborted:
+            logger.info("closed-loop slew aborted")
+        except SlewTimedOut as exc:
+            logger.warning("closed-loop slew timed out: %s", exc)
+            self._buzzer.failure()
+        except Exception:
+            # A mount/cedar error here would otherwise kill this background
+            # task silently -- Slewing just quietly goes false with no
+            # trace of why (bit us testing against a real mount that
+            # started parked). Surface it in both the log and last_status.
+            logger.exception("closed-loop slew failed unexpectedly")
+            self._last_status = LoopStatus(
+                LoopState.FAILED, iteration, target, message="unexpected error, see server log"
+            )
+            self._buzzer.failure()
+
+    def _beep_for(self, state: LoopState) -> None:
+        if state is LoopState.CONVERGED:
+            self._buzzer.success()
+        elif state is LoopState.FAILED:
+            self._buzzer.failure()
+
+    async def abort(self) -> None:
+        """Same effect as the Alpaca AbortSlew action -- exposed directly
+        for the web UI (DESIGN.md §8) so it doesn't need to round-trip
+        through its own HTTP API."""
+        await self.put(ALL_MEMBERS_BY_ACTION["abortslew"], {})
+
+    async def get_sync_point_count(self) -> int | None:
+        """None if `inner` doesn't support this (only IndiTelescopeBackend
+        does -- mount alignment/sync points aren't an ASCOM concept, so
+        mock/alpyca have no equivalent)."""
+        get = getattr(self._inner, "get_sync_point_count", None)
+        return await get() if get is not None else None
+
+    async def clear_sync_points(self) -> bool:
+        """Returns False (no-op) if `inner` doesn't support this."""
+        clear = getattr(self._inner, "clear_sync_points", None)
+        if clear is None:
+            return False
+        await clear()
+        return True
+
+    async def sync_to_cedar(self) -> SolveResult | None:
+        """Web UI "sync now" action (DESIGN.md §8): sync the mount straight
+        to cedar's current plate-solved position, bypassing the closed
+        loop. Returns the solve used, or None if cedar has nothing
+        acceptable right now (the routine case -- no solve yet, or it
+        didn't pass SolveAcceptance).
+
+        Raises SyncRefused instead of returning None when the solve exists
+        but isn't a real plate solve (e.g. MountEchoCedar's loopback) --
+        syncing the mount's persistent alignment/sync-point database
+        against its own already-possibly-wrong belief would corrupt it, and
+        that's a distinct, more actionable problem than "nothing yet". See
+        SolveResult.is_plate_solve."""
+        solve = await self._cedar.get_latest_solve()
+        if solve is None:
+            return None
+        if not solve.is_plate_solve:
+            raise SyncRefused("solve source is not a real plate solve (e.g. MountEchoCedar loopback)")
+        if not self._acceptance.accepts(solve):
+            return None
+        await self._mount.sync_to(solve.sky_coord)
+        return solve
+
+    def status_snapshot(self) -> dict:
+        status = self._last_status
+        if status is None:
+            return {"state": "IDLE"}
+        return {
+            "state": status.state.name,
+            "iteration": status.iteration,
+            "true_target": _coord_dict(status.true_target),
+            "commanded": _coord_dict(status.commanded) if status.commanded else None,
+            "error_arcmin": status.error_arcmin,
+            "message": status.message,
+            "last_solve": _solve_dict(status.last_solve) if status.last_solve else None,
+        }
+
+    async def _cedar_position(self) -> tuple[float, float] | None:
+        """DESIGN.md §3 "Reported position": cedar-preferred with mount
+        fallback -- returns None (falls back to inner/mount) when cedar has
+        no fresh, acceptable solve. Reports cedar's coordinate directly in
+        J2000 rather than converting to the mount's advertised
+        EquatorialSystem -- an acceptable Phase 2 simplification since
+        cedar-goto normalizes internally to J2000 (DESIGN.md §4); exact
+        epoch-matching for strict clients is a follow-up if it matters in
+        practice.
+
+        A cedar-server outage (unreachable, gRPC error -- not just "no
+        solve yet") must degrade the same way: "cedar_fallback_mount"
+        promises falling back to the mount's own position, not surfacing a
+        driver error on every position poll. Found 2026-07-22: this call
+        was unguarded, unlike sync_to_cedar and the closed loop itself,
+        both of which already tolerate a missing/rejected solve."""
+        try:
+            solve = await self._cedar.get_latest_solve()
+        except Exception as exc:
+            logger.warning("cedar solve source unavailable (%r), falling back to mount position", exc)
+            return None
+        if solve is None:
+            return None
+        if solve.capture_time_unix < time.time() - self._position_config.max_solve_age_s:
+            return None
+        if not self._acceptance.accepts(solve):
+            return None
+        coord = solve.sky_coord
+        return coord.ra_deg / 15.0, coord.dec_deg
+
+
+def _coord_dict(coord: CelestialCoord) -> dict:
+    return {"ra_deg": coord.ra_deg, "dec_deg": coord.dec_deg, "epoch": coord.epoch}
+
+
+def _solve_dict(solve: SolveResult) -> dict:
+    return {
+        "sky_coord": _coord_dict(solve.sky_coord),
+        "capture_time_unix": solve.capture_time_unix,
+        "num_matches": solve.num_matches,
+        "prob": solve.prob,
+        "p90_error_arcsec": solve.p90_error_arcsec,
+        "solution_from_imu": solve.solution_from_imu,
+    }

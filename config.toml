@@ -1,0 +1,46 @@
+# cedar-goto default configuration. See DESIGN.md §6 for field docs.
+
+[mount]
+address = "127.0.0.1:11111"
+device_number = 0
+backend = "mock"              # "alpyca" (real mount) | "mock" (simulated-sky harness, DESIGN.md §9a)
+
+# cedar-server serves gRPC on the same port as its web UI (tonic's
+# GrpcWebLayer combines them) -- default 80, not a dedicated gRPC port.
+[cedar]
+address = "127.0.0.1:80"
+
+[server]
+bind = "0.0.0.0"
+alpaca_port = 11111
+discovery = true
+
+# Only used by the mock backend (a real mount reports its own site) --
+# some Alpaca clients treat 0,0 as "unconfigured" and disable GoTo.
+# Defaulted to the Cedar-Box's observer_location seen during testing.
+[site]
+latitude_deg = 50.719156642083021
+longitude_deg = 3.9394812552330514
+elevation_m = 0.0
+
+[loop]
+strategy = "offset"           # "offset" | "sync_reslew"
+tolerance_arcmin = 1.0
+max_iterations = 3
+settle_ms = 1500
+final_sync = true
+
+[solve]
+min_matches = 10
+min_prob = 0.9
+max_p90_error_arcsec = 30
+reject_imu = true
+
+[position]
+source = "cedar_fallback_mount"   # "cedar" | "mount" | "cedar_fallback_mount"
+max_solve_age_s = 5.0
+
+[buzzer]
+enabled = false
+gpio_pin = 18
+pattern = "success"

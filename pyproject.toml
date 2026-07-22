@@ -1,0 +1,54 @@
+[project]
+name = "cedar-goto"
+version = "0.1.0"
+description = "Closed-loop ASCOM Alpaca pointing bridge between cedar-server (plate solver) and a GoTo mount"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "grpcio>=1.65",
+    "grpcio-tools>=1.65",
+    "alpyca>=3.1",
+    "astropy>=6.1",
+    "pydantic>=2.8",
+    "sse-starlette>=2.1",
+    "python-multipart>=0.0.9",
+]
+
+[project.optional-dependencies]
+buzzer = [
+    "gpiozero>=2.0",
+]
+indi = [
+    "pyindi-client>=2.2.0",
+]
+dev = [
+    "pytest>=8.2",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.27",
+]
+
+[project.scripts]
+cedar-goto = "cedar_goto.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[[tool.uv.dependency-metadata]]
+# pyindi-client declares dbus-python as a hard dependency, but doesn't
+# actually import it at runtime (confirmed by spike, indi-refactor.md) --
+# and dbus-python has no prebuilt wheels anywhere, so leaving this
+# unoverridden would force every `pip install cedar-goto[indi]` through a
+# from-source build needing libdbus-1-dev/meson. requests/bottle are also
+# declared but unused by PyIndi.BaseClient.
+name = "pyindi-client"
+version = "2.2.0"
+requires-dist = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

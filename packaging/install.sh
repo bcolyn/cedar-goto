@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# Install cedar-goto as a systemd service (DESIGN.md §9).
+#
+# Usage (from the repo root, on the target Pi/Linux host):
+#   sudo packaging/install.sh [install_dir]
+#
+# Default install_dir is /opt/cedar-goto. Re-running this script upgrades
+# an existing install (code + venv are refreshed; an existing config.toml
+# is left untouched).
+set -euo pipefail
+
+if [ "$(id -u)" -ne 0 ]; then
+    echo "Run as root (sudo)." >&2
+    exit 1
+fi
+
+INSTALL_DIR="${1:-/opt/cedar-goto}"
+SERVICE_USER="${CEDAR_GOTO_USER:-cedar-goto}"
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+id -u "$SERVICE_USER" >/dev/null 2>&1 || useradd --system --home "$INSTALL_DIR" --create-home --shell /usr/sbin/nologin "$SERVICE_USER"
+# Needed only for the GPIO buzzer; harmless if the group doesn't exist.
+usermod -aG gpio "$SERVICE_USER" 2>/dev/null || true
+
+mkdir -p "$INSTALL_DIR"
+rsync -a --delete \
+    --exclude='.venv' --exclude='.git' --exclude='__pycache__' --exclude='*.egg-info' \
+    --exclude='config.toml' --exclude='config-ascom-sim.toml' \
+    "$REPO_DIR"/ "$INSTALL_DIR"/
+
+python3 -m venv "$INSTALL_DIR/.venv"
+"$INSTALL_DIR/.venv/bin/pip" install --upgrade pip
+"$INSTALL_DIR/.venv/bin/pip" install "$INSTALL_DIR"
+# For the optional GPIO buzzer (DESIGN.md §7), instead run:
+#   "$INSTALL_DIR/.venv/bin/pip" install "$INSTALL_DIR[buzzer]"
+
+if [ ! -f "$INSTALL_DIR/config.toml" ]; then
+    cp "$REPO_DIR/config.toml" "$INSTALL_DIR/config.toml"
+    echo "Wrote default config to $INSTALL_DIR/config.toml -- edit it before starting the service."
+fi
+
+chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
+
+install -m 644 "$REPO_DIR/packaging/cedar-goto.service" /etc/systemd/system/cedar-goto.service
+systemctl daemon-reload
+systemctl enable cedar-goto.service
+
+cat <<EOF
+
+Installed to $INSTALL_DIR.
+Next steps:
+  1. Edit $INSTALL_DIR/config.toml (mount/cedar addresses, backend = "alpyca"/"grpc" for real hardware).
+  2. sudo systemctl start cedar-goto
+  3. journalctl -u cedar-goto -f
+EOF

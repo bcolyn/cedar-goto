@@ -1,0 +1,1092 @@
+// Copyright (c) 2026 Steven Rosenthal smr@dt3.org
+// See LICENSE file in root directory for license terms.
+
+syntax = "proto3";
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+import "cedar_sky.proto";
+import "cedar_common.proto";
+
+package cedar;
+
+// In cedar_flutter/lib:
+// run: protoc --experimental_allow_proto3_optional --dart_out=grpc:. --proto_path=../../src/proto ../../src/proto/cedar.proto
+
+// General note: in the Cedar gRPC protocol, the client is a user interface
+// typically realized as a web app or a mobile app. The client interacts with the
+// server via gRPC, using the messages and RPCs defined in this proto file.
+//
+// The server runs independently of the client. In particular, image
+// acquisitions, star detection, plate solving, and updates of SkySafari occur
+// in the server even if no user interface client is connected. A client can obtain
+// FrameResults at a rate equal to or slower than the rate at which the server
+// is producing results.
+//
+// Note also that multiple clients can be connected to the same server, in which
+// case each client can independenly obtain its own sequence of FrameResults
+// without affecting the FrameResults seen by other clients (in other words, if
+// client A obtains a FrameResult X, it is not "consumed", so client B can
+// obtain the same FrameResult X). However, if any client updates the operating
+// mode or settings of the server, the result of this will be visible to all
+// clients.
+//
+// Finally, note Cedar's integration with SkySafari is a protocol separate from
+// the gRPC protocol defined in this proto file. Similarly, Cedar's gRPC
+// integration with Tetra3 is described in a separate proto file.
+
+enum FeatureLevel {
+  FEATURE_LEVEL_UNSPECIFIED = 0;
+  DIY = 1;
+  BASIC = 2;
+  PLUS = 3;
+}
+message ServerInformation {
+  string product_name = 1;
+
+  string copyright = 2;
+
+  string cedar_server_version = 3;
+
+  FeatureLevel feature_level = 4;
+
+  string processor_model = 5;  // Which Rpi model.
+  // Number of logical CPU cores.
+  optional int32 cpu_core_count = 19;
+
+  string os_version = 6;
+  string serial_number = 12;
+
+  float cpu_temperature = 7;  // Celsius.
+
+  google.protobuf.Timestamp server_time = 8;
+
+  // Omitted if no camera detected.
+  optional CameraModel camera = 9;
+
+  // Omitted if no IMU detected.
+  optional string imu_model = 14;
+
+  // The most recent raw IMU reading. Omitted if no IMU detected.
+  optional ImuState imu = 13;
+
+  // The current IMU angular speed, adjusted for the measured zero bias. Omitted
+  // if no IMU detected.
+  optional double imu_angular_speed = 16;
+
+  // The current state of the IMU tracking logic. Omitted if no IMU detected.
+  optional ImuTrackerState imu_tracker_state = 15;
+
+  // WiFi hotspot info.
+  optional WiFiAccessPoint wifi_access_point = 10;
+
+  // Information about client connections.
+  optional ConnectionStatus connection_status = 17;
+
+  // Filenames of image(s) found in run/demo_images directory.
+  repeated string demo_image_names = 11;
+
+  // Recent system load average (number of runnable/waiting processes).
+  optional float system_load_average = 18;
+
+  // Recent CPU usage of the cedar server process, in cores (e.g. 1.0 = one full
+  // core).
+  optional float cedar_load_average = 20;
+}
+
+message CameraModel {
+  string model = 1;
+  optional string model_detail = 4;
+  int32 image_width = 2;
+  int32 image_height = 3;
+  // TODO: add color.
+}
+
+enum ImuTrackerState {
+  TRACKER_STATE_UNKNOWN = 0;
+  MOTIONLESS = 1;
+  MOVING = 2;
+  LOST = 3;
+}
+
+message ImuState {
+  // Meters per second squared.
+  double accel_x = 1;
+  double accel_y = 2;
+  double accel_z = 3;
+
+  // Degrees per second.
+  double angle_rate_x = 4;
+  double angle_rate_y = 5;
+  double angle_rate_z = 6;
+}
+
+// Information about the WiFi access point that Cedar server puts up.
+message WiFiAccessPoint {
+  optional string ssid = 1;
+  optional string psk = 2;  // WiFi password.
+  optional int32 channel = 3;
+}
+
+// Number of current client connections.
+message ConnectionStatus {
+  // Number of cedar_server clients.
+  int32 cedar_wifi = 1;
+  int32 cedar_bluetooth = 2;
+
+  // Number of LX200 telescope clients.
+  int32 lx200_wifi = 3;
+  int32 lx200_bluetooth = 4;
+
+  // We don't track Alpaca telescope clients.
+}
+
+message FixedSettings {
+  optional LatLong observer_location = 2;
+
+  // The current time (when setting, this is the client's time; when retrieving,
+  // this is the server's time). When setting, the server's current time is
+  // updated to match.
+  optional google.protobuf.Timestamp current_time = 4;
+
+  // A name for the current observing session. If not supplied, one is generated
+  // from the current time and the supplied latitude/longitude (converted to a
+  // nearby location name).
+
+  // The session name is used when storing boresight offset, when logging dwell
+  // positions, and when logging debugging captures (the latter should go
+  // elsewhere?).
+  optional string session_name = 5;
+
+  // The configured maximum exposure time. Note that this cannot be changed via
+  // the UpdateFixedSettings() RPC.
+  optional google.protobuf.Duration max_exposure_time = 6;
+}
+
+message LatLong {
+  // Degrees.
+  double latitude = 1;
+  double longitude = 2;
+}
+
+message OperationSettings {
+  // Defaults to SETUP mode.
+  optional OperatingMode operating_mode = 4;
+
+  // Relevant only in SETUP mode. Instead of trying to detect and plate solve
+  // stars (for boresight aligning), Cedar server instead exposes the image in a
+  // conventional photographic fashion and returns the non-stretched image for
+  // display at the client.
+  // ActionRequest.designate_boresight is then used to convey the user's
+  // identification of the image coordinate corresponding to the telescope's FOV
+  // center.
+  optional bool daylight_mode = 1;
+
+  // Relevant only in SETUP mode. Instead of trying to detect and plate solve
+  // stars (for boresight aligning), Cedar server instead exposes the image for
+  // the brightest point in the image.
+  optional bool focus_assist_mode = 14;
+
+  // If true, when Cedar detects that the camera is dwelling (motionless) for
+  // more than some number of seconds, the RA/DEC is logged. Note that if the
+  // RA/DEC are changing during dwelling due to sidereal motion (non-tracked
+  // mount) or polar misalighment (tracked equatorial mount), only the RA/DEC
+  // at the onset of dwelling is logged.
+  optional bool log_dwelled_positions = 10;
+
+  // In OPERATE mode, if `catalog_entry_match` is present, this is used to
+  // determine the `catalog_entries` returned in each FrameResult.
+  // This field is also used to initialize the filter criteria in Cedar Aim's
+  // catalog panel.
+  optional cedar_sky.CatalogEntryMatch catalog_entry_match = 11;
+
+  // Controls whether an image file is substituted for the camera. When calling
+  // UpdateOperationSettings(), set this field to empty string to cancel
+  // demo mode.
+  optional string demo_image_filename = 12;
+
+  // Controls whether the IMU, if present, is used to estimate camera pointing
+  // when plate solutions are unavailable.
+  optional bool use_imu = 15;
+
+  // TODO: decrowd parameter for returned catalog entries?
+
+  reserved 3, 5, 7, 8, 13, 16;
+}
+
+enum OperatingMode {
+  MODE_UNSPECIFIED = 0;
+
+  // Mode supporting establishment of camera focus and boresight alignment of
+  // camera and telescope. Auto-exposure behavior is refined by submodes
+  // daylight_mode and focus_assist_mode:
+  // * Neither in effect: exposure is metered for star detection and plate
+  //   solving.
+  // * daylight_mode: exposure is metered in conventional photographic fashion.
+  // * focus_assist_mode: Exposure metered based on brightest point in image.
+  SETUP = 1;
+
+  // Main operating mode. Continually updated RA/DEC sent to SkySafari.
+  // Detection of tracking mount and accumulation of polar alignment advice
+  // during dwells.
+  // * Exposure metered based on number of detected stars.
+  // * Plate solves done using FOV and distortion estimate obtained when
+  //   leaving SETUP mode.
+  OPERATE = 2;
+}
+
+// User interface preferences and operation settings that are stored durably on
+// the server.
+message Preferences {
+  // How the user interface should display celestial coordinates.
+  optional CelestialCoordFormat celestial_coord_format = 1;
+
+  // Diameter (in degrees) of the boresight circle displayed in operation
+  // mode.
+  optional double eyepiece_fov = 2;
+
+  // If true, the UI should favor red highlights instead of white.
+  optional bool night_vision_theme = 3;
+
+  // If true, the UI app bar is hidden to allow full screen operation.
+  optional bool hide_app_bar = 5;
+
+  // The kind of telescope mount. This influences the display of the boresight
+  // circle (cross aligned to north for EQUATORIAL or to zenith for ALT_AZ) and
+  // target slew direction instructions.
+  optional MountType mount_type = 6;
+
+  // The saved location. On server startup we use this to initialize the
+  // corresponding FixedSettings field. Note: do not update this via
+  // UpdatePreferences().
+  optional LatLong observer_location = 7;
+
+  // Saved catalog object selection criteria for FOV image decoration. On server
+  // startup we use this to initialize the corresponding OperationSettings
+  // field. Note: do not update this via UpdatePreferences().
+  optional cedar_sky.CatalogEntryMatch catalog_entry_match = 11;
+
+  // Additional catalog entry selection parameters used in the UI.
+
+  optional bool max_distance_active = 15;
+  optional double max_distance = 12;  // Degrees.
+
+  optional bool min_elevation_active = 16;
+  optional double min_elevation = 13;  // Degrees.
+
+  optional cedar_sky.Ordering ordering = 14;  // Default is to order by brightness.
+
+  // Advanced mode vs. basic mode.
+  optional bool advanced = 17;
+
+  // 0: normal; -1: smaller; +1: bigger.
+  optional int32 text_size_index = 18;
+
+  // Saved boresight position, in full sensor resolution coordinates. On server
+  // startup we use this to initialize the internal state which appears at
+  // FrameResult.boresight_position. Note: do not update this via
+  // UpdatePreferences().
+  optional ImageCoord boresight_pixel = 19;
+
+  // Whether UI buttons and such are positioned on right side of screen.
+  optional bool right_handed = 21;
+
+  // What the celestial coord display shows. E.g. RA/Dec vs Alt/Az/HA.
+  // Note that this field is used solely by the UI and are not used by server
+  // logic.
+  optional string celestial_coord_choice = 22;
+
+  // What value to display in the performance gauge. E.g. star count, exposure
+  // time, etc. Note that this field is used solely by the UI and are not used
+  // by server logic.
+  optional string perf_gauge_choice = 33;
+
+  // Whether mobile screen is kept on while in Cedar Aim.
+  optional bool screen_always_on = 23;
+
+  // Set of UI information items that should not be shown. Each string
+  // identifies a specific piece of information (e.g., "welcome", "focus_intro",
+  // "align_intro", "too_few_stars", "bright_sky", "solver_failed",
+  // "setup_finished").
+  // Note that this field is used solely by the UI and are not used by server
+  // logic.
+  repeated string dont_show_items = 32;
+
+  // If true, the SETUP focus assist step is skipped. The server attempts to
+  // perform the post-focus calibrations:
+  // * If successful, the server advances to SETUP boresight aligning or OPERATE
+  //   mode.
+  // * If unsuccessful, the
+  //   FrameResult.calibration_data.calibration_failure_reason field is
+  //   populated and the post-focus calibrations are retried every 30 seconds.
+  optional bool skip_focus = 35;
+
+  // If true, when SETUP focus assist is completed (or skipped), the server
+  // advances to OPERATE mode. If false, the server advances to SETUP alignment
+  // mode.
+  optional bool skip_alignment = 36;
+
+  reserved 4, 8, 9, 20, 24, 25, 26, 27, 28, 29, 30, 31, 34;
+}
+
+enum CelestialCoordFormat {
+  FORMAT_UNSPECIFIED = 0;
+
+  // Both right ascension and declination should be formatted as
+  // decimal. Right ascension from 0..360, declination from -90..90.
+  // Example:
+  // RA  = 182.3345 degrees
+  // DEC = 34.2351 degrees
+  DECIMAL = 1;
+
+  // Right ascension should be formatted as hours/minutes/seconds;
+  // declination as degrees/minutes/seconds. The example values given
+  // above would be:
+  // RA  = 12h 9m 20.28s
+  // DEC = 34d 14m 6.36s
+  HMS_DMS = 2;
+}
+
+enum MountType {
+  MOUNT_UNSPECIFIED = 0;
+  EQUATORIAL = 1;
+  ALT_AZ = 2;
+}
+
+// The orientation of the client's display. Deprecated; see below.
+enum DisplayOrientation {
+  ORIENTATION_UNSPECIFIED = 0;
+  LANDSCAPE = 1;
+  PORTRAIT = 2;
+}
+
+message FrameRequest {
+  // This is the frame_id of the previous FrameResult obtained by the requesting
+  // client. If provided, GetFrame() will block until this is no longer the
+  // server's current FrameResult. If omitted, GetFrame() will return the
+  // server's current FrameResult.
+  optional int32 prev_frame_id = 1;
+
+  // Alternative to prev_frame_id for clients that want updates on every plate
+  // solution. If provided, GetFrame() will block until FrameResult.solution_id
+  // differs from this value; this field takes precedence over prev_frame_id.
+  // When an IMU is available, solution_id advances on IMU interpolations
+  // between camera frames, so updates arrive at the IMU interpolation rate
+  // during motion.
+  // Without an IMU, or in non-OPERATE modes, solution_id advances once per
+  // camera frame, so behavior is identical to using prev_frame_id.
+  optional int32 prev_solution_id = 4;
+
+  // If true, GetFrame() returns immediately. If the requested frame (a new frame
+  // different from 'prev_frame_id'/'prev_solution_id', or the current
+  // frame/solution if neither is provided) is available, the returned
+  // FrameResult.has_result field will be true.
+  optional bool non_blocking = 2;
+
+  // In most modes, Cedar adjusts the returned image rotation so that the zenith
+  // is towards the top of the image. When doing so, the server needs to know
+  // the client's orientation for the displayed image.
+  // If omitted, LANDSCAPE is assumed.
+  // Deprecated: Newer clients will always omit this field, causing the server
+  // to return the image as if for landscape, and the client will adjust for
+  // portrait as needed; eventually we can remove this field when all clients
+  // have been updated to not populate it.
+  optional DisplayOrientation display_orientation = 3;
+}
+
+// Next tag: 44.
+message FrameResult {
+  // If FrameRequest.non_blocking is omitted or false, this field will be
+  // absent. If FrameRequest.non_blocking is true, this field will be true
+  // if a suitable result is ready, otherwise this field will be false in
+  // which case all other FrameResult fields should be ignored (aside from
+  // 'server_information', which is always populated).
+  optional bool has_result = 34;
+
+  // Identifies this FrameResult. A client can include this in its next
+  // FrameRequest to block until a new FrameResult is available.
+  int32 frame_id = 1;
+
+  // Identifies the solution that produced this FrameResult. Always advances
+  // on every new result. In OPERATE mode with an IMU, also advances on IMU
+  // interpolations between camera frames, so updates arrive at the IMU rate
+  // during motion. A client can include this in FrameRequest.prev_solution_id
+  // to be notified of every solution, not just new camera frames.
+  int32 solution_id = 43;
+
+  // Information about Cedar-server.
+  ServerInformation server_information = 32;
+
+  // The current FixedSettings on the server.
+  FixedSettings fixed_settings = 27;
+
+  // The current user interface preferences stored on the server.
+  Preferences preferences = 25;
+
+  // The Cedar settings in effect for this frame.
+  OperationSettings operation_settings = 2;
+
+  // Calibration in effect for this frame.
+  CalibrationData calibration_data = 5;
+
+  // Information returned regardless of `operating_mode`.
+
+  // A portion of the image from which information in this FrameResult is
+  // derived. This image is cropped to be the center square portion of the
+  // sensor (full height), typically with some amount of binning.
+  // Note that this image has stretch/gamma applied for better visibility of
+  // dark features (unless OperationSettings.daylight_mode is in effect, in
+  // which case a more natural rendering is used).
+  Image image = 3;
+
+  // The camera exposure integration time for `image`.
+  google.protobuf.Duration exposure_time = 7;
+
+  // The time at which `image` was captured.
+  google.protobuf.Timestamp capture_time = 9;
+
+  // The star candidates detected by CedarDetect; ordered by brightest
+  // first. In SETUP alignment mode, these are the catalog stars and planets
+  // from the plate solution, with relative `brightness` values derived from the
+  // star catalog magnitudes.
+  repeated StarCentroid star_candidates = 4;
+
+  // The number of candidates that were rejected as isolated hot pixels. These
+  // are not included in star_candidates.
+  optional int32 hot_pixel_count = 39;
+
+  // The number of detected stars as a moving average of recent processing
+  // cycles.
+  double star_count_moving_average = 35;
+
+  // The current plate solution. Omitted if no plate solve was attempted for
+  // this frame. Relevant in OPERATE mode and in SETUP mode when neither
+  // `focus_assist_mode` nor `daylight_mode` is present.
+  // Omitted if plate solving was not attempted or did not result in a
+  // solution.
+  optional PlateSolution plate_solution = 17;
+
+  // Estimate of the RMS noise of the full-resolution image. In 8 bit ADU
+  // units.
+  double noise_estimate = 26;
+
+  // Information about Cedar's performance.
+  ProcessingStats processing_stats = 8;
+
+  // The position in full resolution image coordinates of the captured
+  // boresight. If no boresight has been captured, is the image center. See
+  // ActionRequest.capture_boresight and designate_boresight.
+  ImageCoord boresight_position = 21;
+
+  // When transitioning from SETUP focus mode to another mode, Cedar does a
+  // brief sky/camera calibration. During calibration most FrameResult fields
+  // are omitted. Fields present are: server_information, fixed_settings,
+  // preferences, operation_settings, image, calibrating, and
+  // calibration_progress.
+  // This field also becomes true when ActionRequest.calibrate_dark_frame is
+  // carried out.
+  bool calibrating = 22;
+
+  // When `calibrating` is true, this field is an estimate of the progress of
+  // the calibration, which can take several seconds.
+  optional double calibration_progress = 23;
+
+  // True when the server is in skip-focus auto-calibration mode with retries.
+  // The user must disable the skip_focus preference to exit this mode.
+  bool skip_focus_active = 38;
+
+  // Information returned when `operating_mode` is SETUP.
+
+  // This is the estimated position of the brightest point. In full resolution
+  // image coordinates. Only present in `focus_assist_mode`.
+  optional ImageCoord center_peak_position = 12;
+
+  // The pixel value at the center_peak_position. Only present in
+  // `focus_assist_mode`.
+  optional int32 center_peak_value = 6;
+
+  // A small full resolution (usually; 2x binned for color cameras) crop of
+  // `image` centered at `center_peak_position`. Note that this image has
+  // stretch/gamma applied for better visibility of dark features. Only present
+  // in `focus_assist_mode`.
+  optional Image center_peak_image = 13;
+
+  // A small full resolution (usually; 2x binned for color cameras) crop of
+  // `image` centered at a user-designated position (see
+  // ActionRequest.designate_daylight_focus_region).
+  // Only present in `focus_assist_mode` with `daylight_mode`.
+  optional Image daylight_focus_zoom_image = 37;
+
+  // Information returned when `operating_mode` is OPERATE.
+
+  // When the observer's geographic location is known, the `plate_solution`
+  // field is augmented with additional information. Also returned in SETUP
+  // alignment mode.
+  // Omitted if:
+  // - no plate solution was obtained, or
+  // - FixedSettings.observer_location is absent.
+  optional LocationBasedInfo location_based_info = 29;
+
+  // If present, SkySafari or Cedar Sky is requesting that the telescope's
+  // pointing should be changed.
+  optional SlewRequest slew_request = 24;
+
+  // If the boresight is close to the slew target, the server returns a full
+  // resolution (usually; 2x binned for color cameras) crop of 'image' centered
+  // at the 'boresight_position'. Note that this image has stretch/gamma applied
+  // for better visibility of dark features.
+  optional Image boresight_image = 28;
+
+  // Contains information, if available, about adjusting the equatorial mount's
+  // polar axis alignment.
+  PolarAlignAdvice polar_align_advice = 30;
+
+  // Lists the sky catalog entries that are present in the `plate_solution`
+  // field of view. The `catalog_entry_match` field in `operation_settings`
+  // determines what entries are included, except in SETUP alignment mode where
+  // fixed criteria are used (bright named stars and planets).
+  // Empty if `plate_solution` is absent or failed or if Cedar Sky is not
+  // present.
+
+  // The FOV catalog entries that dominate their crowd and should be labelled.
+  repeated FovCatalogEntry labeled_catalog_entries = 31;
+  // The decrowded FOV catalog entries that the UI can display, but should
+  // not label to avoid clutter.
+  repeated FovCatalogEntry unlabeled_catalog_entries = 33;
+
+  // The displayed catalog entry (labeled_catalog_entries +
+  // unlabeled_catalog_entries) that is closest to the boresight. Can be omitted
+  // if no catalog entries are currently visible in the display.
+  optional FovCatalogEntry boresight_catalog_entry = 40;
+
+  // If we have a boresight_catalog_entry, this field gives its distance from
+  // the boresight, as a multiple of the eyepiece FOV radius.
+  optional float boresight_catalog_entry_distance = 42;
+
+  // The constellation of the catalog entry closest to the boresight (even if
+  // not displayed).
+  optional cedar_sky.Constellation boresight_constellation = 41;
+
+  // alerts
+  // * prolonged loss of stars; need setup mode?
+  reserved 10, 11, 36;
+}
+
+message Image {
+  // Whether the image is binned/sampled or full resolution. Values:
+  // 1: full resolution image from the camera.
+  // 2: 2x lower resolution than camera output (in both x and y axes).
+  // 4: 4x lower resolution than camera output.
+  // 8: 8x lower resolution than camera output.
+  int32 binning_factor = 1;
+
+  // Specifies what part of the camera sensor this Image corresponds to, in full
+  // resolution units. If binning_factor is B, the `image_data` dimensions are
+  // rectangle.width/B, rectangle.height/B (floored).
+  Rectangle rectangle = 2;
+
+  // Must be a recognized file format, e.g. BMP or JPEG grayscale 8 bits per pixel.
+  bytes image_data = 3;
+
+  double rotation_size_ratio = 4;  // Deprecated. Always 1.0.
+}
+
+// Describes the position/size of an region within the camera's sensor. In
+// full resolution units.
+message Rectangle {
+  int32 origin_x = 1;
+  int32 origin_y = 2;
+  int32 width = 3;
+  int32 height = 4;
+}
+
+// Summarizes a star-like spot found by the CedarDetect algorithm.
+message StarCentroid {
+  // Location of star centroid in full resolution image coordinates.
+  ImageCoord centroid_position = 1;
+
+  // Sum of the uint8 pixel values of the star's region. The estimated
+  // background is subtracted.
+  double brightness = 4;
+
+  // Count of saturated pixel values.
+  int32 num_saturated = 6;
+
+  // Apparent magnitude. Usually absent, except when
+  // FrameResult.star_candidates is populated in SETUP alignment mode,
+  // in which case the magnitudes are present.
+  optional double magnitude = 7;
+}
+
+message ImageCoord {
+  // A location in full resolution image coordinates. (0.5, 0.5) corresponds to
+  // the center of the image's upper left pixel.
+  double x = 1;
+  double y = 2;
+}
+
+message PlateSolution {
+  // See tetra3.py for descriptions of fields.
+  cedar_common.CelestialCoord image_sky_coord = 1;
+  double roll = 2;
+  double fov = 3;
+  optional double distortion = 4;
+
+  // Arcseconds.
+  double rmse = 5;
+  double p90_error = 6;
+  double max_error = 7;
+
+  int32 num_matches = 8;
+  double prob = 9;
+
+  int32 epoch_equinox = 10;
+  float epoch_proper_motion = 11;
+
+  google.protobuf.Duration solve_time = 12;
+
+  // Result of SolveExtension.target_pixel.
+  repeated cedar_common.CelestialCoord target_sky_coord = 13;
+
+  // Result of SolveExtension.target_sky_coord. (-1,-1) if sky target is not in
+  // image.
+  repeated ImageCoord target_pixel = 14;
+
+  repeated StarInfo matched_stars = 15;
+  repeated ImageCoord pattern_centroids = 16;
+  repeated StarInfo catalog_stars = 17;
+
+  // 3x3 matrix in row-major order.
+  repeated double rotation_matrix = 18;
+
+  // False: solution is from plate solving.
+  // True: solution is from an IMU estimate of the camera's sky coordinate and
+  // roll angle.
+  bool solution_from_imu = 19;
+}
+
+message StarInfo {
+  ImageCoord pixel = 1;
+  cedar_common.CelestialCoord sky_coord = 2;
+  float mag = 3;
+}
+
+// Diagnostic information summarizing Cedar's performance.
+message ProcessingStats {
+  // How much time (in seconds) is spent acquiring the image. This is the max
+  // of the camera exposure time and the (pipelined) time taken to convert the
+  // pixel format.
+  ValueStats acquire_latency = 9;
+
+  // How much time (in seconds) is spent in get_stars_from_image().
+  ValueStats detect_latency = 3;
+
+  // How much time (in seconds) is spent on other detect-engine processing,
+  // excluding image acquisition and get_stars_from_image().
+  ValueStats detect_other_latency = 10;
+
+  // The following items are omitted in SETUP mode.
+
+  // How much time (in seconds) is spent in attempt_plate_solve() (when attempted).
+  ValueStats solve_latency = 4;
+
+  // How much time (in seconds) is spent in process_plate_solution_result()
+  // (when a plate solve is attempted).
+  ValueStats solve_other_latency = 11;
+
+  // The fraction of images on which a plate solution is attempted. If too few
+  // stars are detected we skip solving. Only the 'mean' is meaningful.
+  ValueStats solve_attempt_fraction = 5;
+
+  // The fraction of plate solve attempts that succeed. Only the 'mean' is
+  // meaningful.
+  ValueStats solve_success_fraction = 6;
+
+  // How much time (in seconds) is spent preparing the FrameResult to be
+  // returned. This includes time spent binning, applying gamma, rotating, and
+  // jpg compressing the display image.
+  ValueStats serve_latency = 7;
+
+  // Time interval (in seconds) between successive plate solve attempts.
+  ValueStats solve_interval = 8;
+
+  reserved 1, 2;
+}
+
+message ValueStats {
+  // Stats from the most recent 100 results. Omitted if there are no results
+  // yet.
+  optional DescriptiveStats recent = 1;
+
+  // Stats from the beginning of the session, or since the last transition
+  // from SETUP mode to OPERATE mode.
+  // Omitted if there are no results since session start or reset.
+  optional DescriptiveStats session = 2;
+}
+
+// See each item in ProcessingStats for units.
+message DescriptiveStats {
+  double min = 1;
+  double max = 2;
+
+  double mean = 3;
+  double stddev = 4;
+
+  // Omitted for `session` stats.
+  optional double median = 5;
+  optional double median_absolute_deviation = 6;
+}
+
+message CalibrationData {
+  // Omitted if a sky/camera calibration has not been attempted.
+  optional google.protobuf.Timestamp calibration_time = 1;
+
+  // Indicates reason, if any, that the calibration failed.
+  optional CalibrationFailureReason calibration_failure_reason = 12;
+
+  // Exposure time determined to yield the desired number of star detections
+  // during calibration.
+  // Operation mode varies the exposure duration around this value based on
+  // the current detected star count.
+  optional google.protobuf.Duration target_exposure_time = 2;
+
+  // The camera offset value [0..20] found to be needed to avoid black crush.
+  // Omitted if a sky/camera calibration has not succeeded.
+  optional int32 camera_offset = 3;
+
+  // The angular size (degrees) of the camera's width (longer dimension)
+  // and height projected onto the sky.
+  // Omitted if a sky/camera calibration has not succeeded.
+  optional double fov_horizontal = 4;
+  optional double fov_vertical = 11;
+
+  // The plate solver's estimate of the lens distortion (pincushion or barrel).
+  // Omitted if a sky/camera calibration has not succeeded.
+  optional double lens_distortion = 5;
+
+  // The 'match_max_error' value that we pass to the plate solver.
+  optional double match_max_error = 8;
+
+  // The lens focal length in millimeters, derived from `fov_horizontal`
+  // together with the camera's sensor's physical size.
+  // Omitted if a sky/camera calibration has not succeeded.
+  optional double lens_fl_mm = 6;
+
+  // The angular size of a pixel, in degrees. This is for the field center, as
+  // the "pinhole" projection of sky angles onto a planar detector causes the
+  // pixel/angle scale to vary as you move away from the center.
+  // Omitted if a sky/camera calibration has not succeeded.
+  optional double pixel_angular_size = 7;
+
+  // Gyro zero bias, degrees per second. Absent if no IMU or if calibration not
+  // yet performed.
+  optional double gyro_zero_bias_x = 15;
+  optional double gyro_zero_bias_y = 16;
+  optional double gyro_zero_bias_z = 17;
+
+  // Gyro transform fit quality. Absent if no IMU or if calibration not yet
+  // performed. This is the RMS residual angle distance divided by the angle
+  // distance between the points from which the transform estimate was formed.
+  // If this value is 0.05 (a decent fit), then during a slew of 100 degrees the
+  // expected error in the IMU estimate will be 0.05 * 100 degrees or 5
+  // degrees.
+  optional double gyro_transform_error_fraction = 18;
+  optional string camera_view_gyro_axis = 19;  // +X, -X, +Y, -Y, +Z, -Z.
+  optional double camera_view_misalignment = 20;  // Degrees.
+  optional string camera_up_gyro_axis = 21;  // +X, -X, +Y, -Y, +Z, -Z.
+  optional double camera_up_misalignment = 22;  // Degrees.
+
+  // The number of entries in the bright spot map. Omitted if a bright spot map
+  // is not being used or is not yet ready.
+  optional int32 bright_spot_map_count = 23;
+
+  reserved 9, 10, 13, 14;
+}
+
+enum CalibrationFailureReason {
+  REASON_UNSPECIFIED = 0;
+
+  // Exposure calibration failed to find stars at maximum exposure duration.
+  // Likely causes: lens cover is closed; dark clouds.
+  TOO_FEW_STARS = 1;
+
+  // Exposure calibration reached its mean scene brightness limit before
+  // detecting the desired number of stars. Likely causes: not pointed at sky;
+  // bright clouds; twilight too bright; extreme light pollution.
+  BRIGHT_SKY = 2;
+
+  // Cedar Solve could not find a solution. If exposure calibration succeeds
+  // a solver failure is unusual.
+  SOLVER_FAILED = 3;
+}
+
+// When the observer's geographic location is known, the
+// FrameResult.plate_solution field is augmented with additional information.
+message LocationBasedInfo {
+  // Similar to SolveResult.roll, except gives the position angle of the zenith
+  // relative to the boresight. Angle is measured in degrees, with zero being
+  // the image's "up" direction (towards y=0); a positive zenith roll angle
+  // means the zenith is counter-clockwise from image "up".
+  double zenith_roll_angle = 1;
+
+  // Altitude (degrees, relative to the local horizon) of the boresight.
+  double altitude = 2;
+
+  // Azimuth (degrees, positive clockwise from north) of the boresight.
+  double azimuth = 3;
+
+  // Hour angle (degrees, -180..180). Negative hour angle means boresight
+  // is approaching the meridian from east; positive means boresight
+  // is moving away from the meridian towards west.
+  double hour_angle = 4;
+}
+
+// Describes a telescope motion request from SkySafari or Cedar Sky.
+message SlewRequest {
+  // Identifies the target coordinate of the telescope motion request.
+  cedar_common.CelestialCoord target = 1;
+
+  // The Cedar Sky catalog entry, if any, for `target`.
+  optional cedar_sky.CatalogEntry target_catalog_entry = 8;
+
+  // The distance, in degrees, between the boresight and the target. Omitted
+  // if there is no valid plate solution.
+  optional double target_distance = 2;
+
+  // The position angle (degrees) from the boresight to the target. If the
+  // target is above the boresight in image coordinates, the position angle is
+  // zero. Positive target_angle values go counter-clockwise from image "up", so
+  // a target_angle value of 90 degrees means the target is to the left of the
+  // boresight in the image.
+  // Omitted if there is no valid plate solution.
+  optional double target_angle = 3;
+
+  // To move the boresight to the target, this is the angle by which the
+  // telescope must be moved about the rotation axis (right ascension for
+  // equatorial mount; azimuth for alt/az mount). Degrees; positive is towards
+  // east in equatorial, clockwise (viewed from above) in alt/az. Omitted if
+  // alt/az mode and observer location has not been set.
+  // Range: -180..180
+  optional double offset_rotation_axis = 5;
+
+  // To move the boresight to the target, this is the angle by which the
+  // telescope must be moved about the other axis (declination for equatorial
+  // mount; altitude for alt/az mount). Degrees; positive is towards north pole
+  // in equatorial, towards zenith in alt/az. Omitted if alt/az mode and
+  // observer location has not been set.
+  // Range: -180..180
+  optional double offset_tilt_axis = 6;
+
+  // Position of the target in FrameResult.image (in full resolution units).
+  // Omitted if the target is not in the field of view or there is no valid
+  // plate solution.
+  optional ImageCoord image_pos = 4;
+
+  reserved 7, 9;
+}
+
+// Estimate of alt/az offset of mount's polar axis from celestial pole. Not
+// available if the telescope is not a clock-driven equatorial mount
+// (auto-detected) or if the observer's geographic location is not known. Note
+// that it is possible for one of alt or az correction to be supplied and the
+// other omitted.
+message PolarAlignAdvice {
+  // The amount by which the mount azimuth should be adjusted, in degrees.
+  // Positive is clockwise looking down at the mount from above; in northern
+  // (southern) hemisphere this is moving polar axis towards east (west).
+  optional ErrorBoundedValue azimuth_correction = 1;
+
+  // The amount by which the mount elevation should be adjusted, in degrees.
+  // Positive means raise the polar axis.
+  optional ErrorBoundedValue altitude_correction = 2;
+}
+
+// A value estimate +/- an error estimate.
+message ErrorBoundedValue {
+  // The estimated value.
+  double value = 1;
+
+  // Estimate of the RMS error of `value`.
+  double error = 2;
+}
+
+// Represents a Cedar-sky catalog item in the current FOV that satisfies
+// the `catalog_entry_match` criteria.
+message FovCatalogEntry {
+  cedar_sky.CatalogEntry entry = 1;
+  ImageCoord image_pos = 2;
+
+  // Computed information, available if observer location/time is known.
+
+  // Altitude (degrees, relative to the local horizon).
+  optional double altitude = 3;
+
+  // Azimuth (degrees, positive clockwise from north).
+  optional double azimuth = 4;
+}
+
+message ActionRequest {
+  // Cancels a calibration; no effect if no calibration is underway.
+  optional bool cancel_calibration = 9;
+
+  // The `capture_boresight` function is used during an active slew to target.
+  // This lets the user update/refine the boresight offset when the user has
+  // centered the target in the telescope's field of view.
+  optional bool capture_boresight = 1;
+
+  // In SETUP alignment mode, this conveys which part of the image the user
+  // tapped to designate the telescope's FOV center (in daylight mode) or the
+  // x/y image position of the highlighted star/planet the user selected (not in
+  // daylight mode). The image coordinates are full resolution within
+  // FrameResult.image.
+  optional ImageCoord designate_boresight = 2;
+
+  // Shut down the computer on which the Cedar server is running. Do this before
+  // unplugging the power!
+  optional bool shutdown_server = 3;
+
+  // Reboot the computer on which the Cedar server is running.
+  optional bool restart_server = 8;
+
+  // Cedar-aim is initiating a goto operation. This might be from a Cedar Sky
+  // catalog selection, or it might be a user-entered RA/Dec value.
+  optional cedar_common.CelestialCoord initiate_slew = 6;
+
+  // Tells SkySafari that the slew is finished (or discontinued).
+  optional bool stop_slew = 4;
+
+  // Save the current image for debugging. The image is saved in the run
+  // directory on the server with the current date/time incorporated into the
+  // filename.
+  // TODO: return filename? Provide rename action? Return image to be saved
+  // on client device?
+  optional bool save_image = 5;
+
+  // Update ssid, psk, and/or channel setting for Cedar server's
+  // WiFi access point.
+  optional WiFiAccessPoint update_wifi_access_point = 7;
+
+  // Clear all items from Preferences.dont_show_items.
+  optional bool clear_dont_show_items = 10;
+
+  // In SETUP daylight focus mode, conveys which part of the image the user
+  // wants magnified for focusing. The image coordinates are in full resolution
+  // within FrameResult.image.
+  optional ImageCoord designate_daylight_focus_region = 11;
+
+  // Initiate calibration of dark frame(s). The user must have closed the lens
+  // cap. FrameResult.calibrating will be true during the dark calibration
+  // process.
+  optional bool calibrate_dark_frame = 13;
+
+  // Discards the hot pixel map and any partial state towards building it.
+  // After this action, CalibrationData.bright_spot_map_count will be absent
+  // until the map is rebuilt.
+  optional bool reset_hot_pixel_map = 14;
+
+  // Causes the Cedar server to panic. For testing.
+  optional bool crash_server = 12;
+
+  // Enables or disables the WiFi access point. When disabled, the AP is
+  // brought down until explicitly re-enabled or the server reboots. Useful
+  // after switching to Bluetooth.
+  optional bool wifi_enabled = 15;
+}
+
+message ServerLogRequest {
+  // Specifies how many bytes (most recent) of the server log to retrieve.
+  int32 log_request = 1;
+}
+
+message ServerLogResult {
+  string log_content = 1;
+}
+
+message EmptyMessage {}
+
+message GetBluetoothNameResponse {
+  string name = 1;
+  optional string address = 2;
+}
+
+message BondedDevice {
+  string name = 1;
+  string address = 2;
+}
+
+message GetBondedDevicesResponse {
+  repeated BondedDevice devices = 1;
+}
+
+message RemoveBondRequest {
+  string address = 1;
+}
+
+message SetPairingModeRequest {
+  bool enabled = 1;
+
+  // When enabled==true, by default Cedar's bluetooth pairing mode is enabled
+  // for a finite time duration. Setting forever==true keeps pairing enabled
+  // indefinitely.
+  bool forever = 2;
+}
+
+service Cedar {
+  rpc GetServerLog(ServerLogRequest) returns (ServerLogResult);
+
+  // Changes zero or more of Cedar's "fixed" settings. If a field is omitted
+  // from the supplied FixedSettings, that setting is not updated. Returns the
+  // FixedSettings after any updates have been applied. To get the current
+  // settings without making any changes, pass an empty FixedSettings request.
+  rpc UpdateFixedSettings(FixedSettings) returns (FixedSettings);
+
+  // Reverts Cedar's observer location back to unknown.
+  rpc ClearObserverLocation(EmptyMessage) returns (EmptyMessage);
+
+  // Changes zero or more of Cedar's operation settings. If a field is omitted
+  // from the supplied OperationSettings, that setting is not updated. Returns
+  // the OperationSettings after any updates have been applied (in most cases;
+  // when the change triggers a calilbration, the change is not reflected until
+  // the calibration is complete).
+  // To get the current settings without making any changes, pass an empty
+  // OperationSettings request.
+  rpc UpdateOperationSettings(OperationSettings) returns (OperationSettings);
+
+  // Changes zero or more of Cedar's user interface preferences. If a field is
+  // omitted from the supplied Preferences, that preference is not updated.
+  // For the dont_show_items field: an empty array means no change; a non-empty
+  // array means add these items to the existing set (no duplicates).
+  // Returns the Preferences after any updates have been applied. To get the
+  // current preferences without making any changes, pass an empty Preferences
+  // request.
+  rpc UpdatePreferences(Preferences) returns (Preferences);
+
+  // Obtains the most recent Cedar computation result. Blocks if necessary to
+  // wait for a new result (see FrameRequest's `prev_frame_id` field).
+  rpc GetFrame(FrameRequest) returns (FrameResult);
+
+  // Server-streaming variant of GetFrame(). The client sends one FrameRequest
+  // and the server pushes FrameResult messages continuously as new frames
+  // become available, until the client cancels the stream. The `non_blocking`
+  // field of FrameRequest is ignored; the server always waits for a new frame
+  // before sending. The `prev_frame_id` / `prev_solution_id` fields apply only
+  // to the first frame; subsequent frames advance automatically.
+  rpc GetFrames(FrameRequest) returns (stream FrameResult);
+
+  // Performs the requested action(s).
+  rpc InitiateAction(ActionRequest) returns (EmptyMessage);
+
+  // For Cedar Sky, if implemented in Cedar server. See cedar_sky.proto.
+  rpc QueryCatalogEntries(cedar_sky.QueryCatalogRequest) returns (cedar_sky.QueryCatalogResponse);
+  rpc GetCatalogEntry(cedar_sky.CatalogEntryKey) returns (cedar_sky.CatalogEntry);
+  rpc GetCatalogDescriptions(EmptyMessage) returns (cedar_sky.CatalogDescriptionResponse);
+  rpc GetObjectTypes(EmptyMessage) returns (cedar_sky.ObjectTypeResponse);
+  rpc GetConstellations(EmptyMessage) returns (cedar_sky.ConstellationResponse);
+
+  // Bluetooth management.
+  rpc GetBluetoothName(EmptyMessage) returns (GetBluetoothNameResponse);
+  rpc SetPairingMode(SetPairingModeRequest) returns (EmptyMessage);
+  rpc GetBondedDevices(EmptyMessage) returns (GetBondedDevicesResponse);
+  rpc RemoveBond(RemoveBondRequest) returns (EmptyMessage);
+}

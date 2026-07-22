@@ -1,0 +1,19 @@
+[Unit]
+Description=cedar-goto - closed-loop ASCOM Alpaca pointing bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cedar-goto
+WorkingDirectory=/opt/cedar-goto
+ExecStart=/opt/cedar-goto/.venv/bin/python -m cedar_goto --config /opt/cedar-goto/config.toml
+Restart=on-failure
+RestartSec=5
+# Needed only if the GPIO buzzer is enabled (DESIGN.md §7) -- harmless
+# otherwise. Requires the service user to also be in the `gpio` group
+# (install.sh does this).
+SupplementaryGroups=gpio
+
+[Install]
+WantedBy=multi-user.target

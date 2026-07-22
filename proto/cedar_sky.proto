@@ -1,0 +1,164 @@
+// Copyright (c) 2024 Steven Rosenthal smr@dt3.org
+// See LICENSE file in root directory for license terms.
+
+syntax = "proto3";
+
+import "cedar_common.proto";
+
+package cedar_sky;
+
+// Describes various constraints that must all be satisfied for a sky catalog
+// entry to be returned by QueryCatalogEntries() RPC.
+message QueryCatalogRequest {
+  // Constraints relative to information about the sky objects themselves.
+  CatalogEntryMatch catalog_entry_match = 1;
+
+  // Distance from the current telescope boresight position in the sky. Ignored
+  // if Cedar has no plate solution.
+  optional double max_distance = 2;  // Degrees.
+
+  // Elevation relative to the current horizon. Ignored if Cedar does not know
+  // the observer location and current time.
+  optional double min_elevation = 3;  // Degrees.
+
+  // If two objects from the same catalog satisfy the criteria, and are
+  // within this angular distance of each other, only one is returned. The
+  // brighter object is returned. If omitted, no decrowding is done.
+  optional double decrowd_distance = 5;  // Arcsec.
+
+  optional Ordering ordering = 6;  // Default is to order by brightness.
+
+  // If given, caps the number of `entries` in QueryCatalogResponse.
+  optional int32 limit_result = 7;
+
+  // If given, applies a text match constraint. The server canonicalizes the
+  // given string, removing dangerous characters, tokenizing it, etc. Each token
+  // is treated as a prefix search term, and multiple token terms are combined
+  // with implicit AND; order is not significant. Thus, |andr gal| and
+  // |gal andr| both match "Andromeda Galaxy".
+  // Note that when `text_search` is given, the `catalog_entry_match`,
+  // `max_distance`, and `min_elevation` constraints are ignored.
+  optional string text_search = 8;
+}
+
+// Specifies what intrinsic criteria to apply when matching catalog entries.
+message CatalogEntryMatch {
+  // Limiting magnitude. If provided, objects fainter than the limit are
+  // excluded.
+  optional int32 faintest_magnitude = 1;
+
+  // If true, `catalog_label` is used to match catalog(s).
+  bool match_catalog_label = 4;
+  // What catalog(s) to search.
+  repeated string catalog_label = 2;
+
+  // If true, `object_type_label` is used to match object type(s).
+  bool match_object_type_label = 5;
+  // What object type(s) to search. Note: if empty, no filtering on object
+  // type is done.
+  repeated string object_type_label = 3;
+}
+
+enum Ordering {
+  UNSPECIFIED = 0;
+
+  // Brightest first.
+  BRIGHTNESS = 1;
+
+  // Closest first. If no plate solution is available, reverts to brightness
+  // ordering.
+  SKY_LOCATION = 2;
+
+  // Highest first. If observer geolocation is unknown, reverts to brightness
+  // ordering.
+  ELEVATION = 3;
+
+  // TODO: MARATHON: time until setting to within min_elevation.
+}
+
+message QueryCatalogResponse {
+  // The catalog entries that satisfy the QueryCatalogRequest criteria.
+  repeated SelectedCatalogEntry entries = 1;
+
+  // If `limit_result` is specified in QueryCatalogRequest, this will
+  // be the number of entries that were truncated after the limit was
+  // reached.
+  int32 truncated_count = 2;
+}
+
+message SelectedCatalogEntry {
+  CatalogEntry entry = 1;
+
+  // Other entries, if any, that were suppressed due to `dedup_distance` in the
+  // Cedar sky implementation.
+  repeated CatalogEntry deduped_entries = 2;
+
+  // Other entries, if any, that were suppressed due to `decrowd_distance` in
+  // the QueryCatalogRequest.
+  repeated CatalogEntry decrowded_entries = 3;
+
+  // Computed information, available if observer location/time is known.
+
+  // Altitude (degrees, relative to the local horizon).
+  optional double altitude = 4;
+
+  // Azimuth (degrees, positive clockwise from north).
+  optional double azimuth = 5;
+
+  // TODO: if below horizon, rising time; if above horizon, setting time.
+}
+
+message CatalogEntry {
+  // These two fields combine to be globally unique entry label, e.g. 'M51',
+  // 'NGC3982'.
+  string catalog_label = 1;  // M, NGC, etc.
+  string catalog_entry = 2;  // 51, 3982, etc.
+
+  cedar_common.CelestialCoord coord = 3;
+  optional Constellation constellation = 4;
+  ObjectType object_type = 5;
+
+  optional double magnitude = 6;  // Apparent magnitude.
+  optional string angular_size = 7;  // Arc minutes. Usually numeric.
+
+  optional string common_name = 8;  // Albireo, Horsehead, Crab Nebula, etc.
+  optional string notes = 9;
+}
+
+message CatalogDescription {
+  string label = 1;  // M, NGC, etc.
+  string name = 2;  // Messier, New General Catalog, etc.
+  string description = 3;
+  string source = 4;
+  optional string copyright = 5;
+  optional string license = 6;
+}
+
+message CatalogDescriptionResponse {
+  repeated CatalogDescription catalog_descriptions = 1;
+}
+
+message ObjectType {
+  string label = 1;  // Nebula, galaxy, double star, etc.
+  string broad_category = 2;  // e.g. 'cluster', whereas label might be
+                              // 'open cluster' or 'globular cluster' etc.
+}
+
+message ObjectTypeResponse {
+  repeated ObjectType object_types = 1;
+}
+
+message Constellation {
+  string label = 1;  // e.g. Psc.
+  string name = 2;  // e.g. Pisces.
+}
+
+message ConstellationResponse {
+  repeated Constellation constellations = 1;
+}
+
+message CatalogEntryKey {
+  string cat_label = 1;  // Corresponds to catalog_description.label. PL, AST,
+                         // or COM.
+  string entry = 2;  // Corresponds to catalog_entry.entry field.
+}
