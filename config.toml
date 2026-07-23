@@ -32,7 +32,7 @@ final_sync = true
 
 [solve]
 min_matches = 10
-min_prob = 0.9
+max_prob_false_positive = 1e-3
 max_p90_error_arcsec = 30
 reject_imu = true
 

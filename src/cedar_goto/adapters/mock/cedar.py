@@ -23,7 +23,7 @@ class MockCedar(SolveSource):
                 sky_coord=self._world.true_pointing,
                 capture_time_unix=time.time(),
                 num_matches=2,
-                prob=0.2,
+                prob=0.5,
                 p90_error_arcsec=200.0,
                 solution_from_imu=False,
             )
@@ -35,7 +35,7 @@ class MockCedar(SolveSource):
             ),
             capture_time_unix=time.time(),
             num_matches=42,
-            prob=0.99,
+            prob=1e-20,
             p90_error_arcsec=8.0,
             solution_from_imu=False,
         )

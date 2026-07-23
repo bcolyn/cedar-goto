@@ -35,7 +35,7 @@ class MountEchoCedar(SolveSource):
             sky_coord=precess_to_j2000(coord),
             capture_time_unix=time.time(),
             num_matches=999,
-            prob=1.0,
+            prob=0.0,
             p90_error_arcsec=0.0,
             solution_from_imu=False,
             is_plate_solve=False,

@@ -59,7 +59,10 @@ class LoopConfig(BaseModel):
 
 class SolveConfig(BaseModel):
     min_matches: int = 10
-    min_prob: float = 0.9
+    max_prob_false_positive: float = 1e-3
+    """See SolveAcceptance.max_prob_false_positive (core/solve.py) --
+    tetra3's reported "prob" is a false-positive probability, lower is
+    better."""
     max_p90_error_arcsec: float = 30.0
     reject_imu: bool = True
 

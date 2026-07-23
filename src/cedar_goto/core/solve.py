@@ -29,7 +29,13 @@ class SolveResult:
 @dataclass(frozen=True, slots=True)
 class SolveAcceptance:
     min_matches: int = 10
-    min_prob: float = 0.9
+    max_prob_false_positive: float = 1e-3
+    """SolveResult.prob is tetra3's probability that the match is a
+    false-positive -- lower is better (found 2026-07-23: cedar-goto
+    previously treated it as a confidence score and required prob >= 0.9,
+    which rejected every real solve, since accepted tetra3 solves routinely
+    report prob around 1e-20 or smaller). 1e-3 matches tetra3's own default
+    internal match_threshold."""
     max_p90_error_arcsec: float = 30.0
     reject_imu: bool = True
 
@@ -38,7 +44,7 @@ class SolveAcceptance:
             return False
         if solve.num_matches < self.min_matches:
             return False
-        if solve.prob < self.min_prob:
+        if solve.prob > self.max_prob_false_positive:
             return False
         if solve.p90_error_arcsec > self.max_p90_error_arcsec:
             return False

@@ -37,7 +37,7 @@ def _loop_config(config: Config) -> LoopConfigCore:
 def _solve_acceptance(config: Config) -> SolveAcceptance:
     return SolveAcceptance(
         min_matches=config.solve.min_matches,
-        min_prob=config.solve.min_prob,
+        max_prob_false_positive=config.solve.max_prob_false_positive,
         max_p90_error_arcsec=config.solve.max_p90_error_arcsec,
         reject_imu=config.solve.reject_imu,
     )
