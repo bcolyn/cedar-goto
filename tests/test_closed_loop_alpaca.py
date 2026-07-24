@@ -13,7 +13,7 @@ from cedar_goto.adapters.mock.telescope_backend import MockTelescopeBackend
 from cedar_goto.adapters.mock.world import HarmonicErrorModel, World
 from cedar_goto.config import PositionSourceConfig
 from cedar_goto.core.coords import CelestialCoord
-from cedar_goto.core.loop import LoopConfigCore, SlewStrategy
+from cedar_goto.core.loop import LoopConfigCore
 from cedar_goto.core.solve import SolveAcceptance
 from cedar_goto.web.app import create_app
 from cedar_goto.web.closed_loop_backend import ClosedLoopTelescopeBackend
@@ -51,10 +51,9 @@ async def _slew_and_wait(client: httpx.AsyncClient, ra_hours: float, dec_deg: fl
     pytest.fail("closed-loop slew never finished")
 
 
-@pytest.mark.parametrize("strategy", [SlewStrategy.OFFSET, SlewStrategy.SYNC_RESLEW])
-async def test_slew_converges_and_slewing_reflects_the_loop(strategy: SlewStrategy):
+async def test_slew_converges_and_slewing_reflects_the_loop():
     world = World(error_model=HarmonicErrorModel())
-    backend = make_backend(world, strategy=strategy)
+    backend = make_backend(world)
     async with await make_client(backend) as client:
         await client.put("/api/v1/telescope/0/connected", data={"Connected": "true"})
 
@@ -171,6 +170,66 @@ async def test_new_slew_supersedes_a_running_one():
                 break
         else:
             pytest.fail("new slew never took over the loop")
+
+
+async def test_disabling_correction_does_not_abort_an_in_progress_loop():
+    """set_correction_enabled(False) only affects the *next* slew -- flipping
+    the web UI toggle mid-slew shouldn't yank control away from a
+    closed-loop correction already underway."""
+    world = World(error_model=HarmonicErrorModel())
+    backend = make_backend(world, max_iterations=10)
+    async with await make_client(backend) as client:
+        await client.put("/api/v1/telescope/0/connected", data={"Connected": "true"})
+        await client.put(
+            "/api/v1/telescope/0/slewtocoordinatesasync",
+            data={"RightAscension": "8.0", "Declination": "30.0"},
+        )
+        assert (await client.get("/api/v1/telescope/0/slewing")).json()["Value"] is True
+
+        backend.set_correction_enabled(False)
+
+        for _ in range(200):
+            await asyncio.sleep(0.02)
+            if (await client.get("/api/v1/telescope/0/slewing")).json()["Value"] is False:
+                break
+        else:
+            pytest.fail("closed-loop slew never finished")
+
+        assert backend.last_status is not None
+        assert backend.last_status.state.name == "CONVERGED"
+
+
+async def test_correction_disabled_is_a_bare_proxy_slew():
+    """With correction disabled, SlewToCoordinatesAsync must not run the
+    closed loop at all -- no nudging, no mount.sync_to(), just the GoTo as
+    commanded (Phase 1 behavior)."""
+    world = World(error_model=HarmonicErrorModel())
+    backend = make_backend(world)
+    backend.set_correction_enabled(False)
+    async with await make_client(backend) as client:
+        await client.put("/api/v1/telescope/0/connected", data={"Connected": "true"})
+        await client.put(
+            "/api/v1/telescope/0/slewtocoordinatesasync",
+            data={"RightAscension": "8.0", "Declination": "30.0"},
+        )
+        assert (await client.get("/api/v1/telescope/0/slewing")).json()["Value"] is True
+
+        for _ in range(20):
+            await asyncio.sleep(0.02)
+            assert backend.last_status is None
+
+        for _ in range(200):
+            await asyncio.sleep(0.02)
+            if (await client.get("/api/v1/telescope/0/slewing")).json()["Value"] is False:
+                break
+        else:
+            pytest.fail("bare slew never settled")
+
+        # No correction applied -- the raw harmonic pointing error (a few
+        # arcmin, DESIGN.md §3a) is still present, unlike a converged
+        # closed-loop slew.
+        ra = (await client.get("/api/v1/telescope/0/rightascension")).json()["Value"]
+        assert ra != pytest.approx(8.0, abs=1e-6)
 
 
 async def test_gives_up_when_solves_are_never_accepted():

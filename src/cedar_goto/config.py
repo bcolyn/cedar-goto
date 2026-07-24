@@ -50,11 +50,21 @@ class SiteConfig(BaseModel):
 
 
 class LoopConfig(BaseModel):
-    strategy: Literal["offset", "sync_reslew"] = "offset"
     tolerance_arcmin: float = 1.0
+    """"min_move": below this measured error, the loop stops nudging and
+    reports converged."""
+    max_correction_arcmin: float | None = None
+    """"max_move": above this measured error, the loop refuses to nudge
+    automatically and reports out-of-range instead of slewing on a
+    solve that far off (more likely a bad solve than real pointing error).
+    None disables the check."""
     max_iterations: int = 3
     settle_ms: int = 1500
-    final_sync: bool = True
+    correction_enabled: bool = True
+    """Starting state of the web UI's auto-correction toggle -- can be
+    flipped at runtime from the dashboard without restarting the service.
+    With it off, SlewToCoordinates(Async) is a bare proxy to the mount (no
+    cedar feedback/nudging)."""
 
 
 class SolveConfig(BaseModel):

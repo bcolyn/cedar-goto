@@ -24,11 +24,10 @@ longitude_deg = 3.9394812552330514
 elevation_m = 0.0
 
 [loop]
-strategy = "offset"           # "offset" | "sync_reslew"
-tolerance_arcmin = 1.0
+tolerance_arcmin = 1.0        # "min_move": stop nudging once measured error is under this
+# max_correction_arcmin = 30.0  # "max_move": refuse to auto-nudge above this (uncomment once tuned on-sky)
 max_iterations = 3
 settle_ms = 1500
-final_sync = true
 
 [solve]
 min_matches = 10

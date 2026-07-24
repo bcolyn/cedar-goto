@@ -137,6 +137,27 @@ async def action_sync_now(request: Request) -> JSONResponse:
     )
 
 
+@router.post("/api/ui/actions/sync-to-target")
+async def action_sync_to_target(request: Request) -> JSONResponse:
+    target = await request.app.state.telescope_backend.sync_to_target()
+    if target is None:
+        return JSONResponse(
+            {"ok": False, "message": "no completed slew to sync to yet (or one is still in progress)"}
+        )
+    ra_hours = target.ra_deg / 15.0
+    return JSONResponse(
+        {"ok": True, "message": f"synced to target RA {ra_hours:.3f}h Dec {target.dec_deg:.3f}°"}
+    )
+
+
+@router.post("/api/ui/actions/correction")
+async def action_set_correction(request: Request) -> JSONResponse:
+    form = await request.form()
+    enabled = form.get("enabled") == "true"
+    request.app.state.telescope_backend.set_correction_enabled(enabled)
+    return JSONResponse({"ok": True, "message": f"auto-correction {'enabled' if enabled else 'disabled'}"})
+
+
 _PAGE = """<!doctype html>
 <html>
 <head>
@@ -151,9 +172,12 @@ _PAGE = """<!doctype html>
   .state { font-weight: bold; padding: 0.1rem 0.6rem; border-radius: 4px; }
   .state-CONVERGED { background: #1a5c34; }
   .state-FAILED { background: #5c1a1a; }
+  .state-OUT_OF_RANGE { background: #7a4a12; }
   .state-IDLE, .state-undefined { background: #444; }
   .state-SLEWING_MOUNT, .state-SETTLING, .state-AWAIT_SOLVE, .state-EVALUATE { background: #4a4a1a; }
-  button { background: #2a6b3f; border: none; color: white; padding: 0.5rem 1.1rem; border-radius: 4px; cursor: pointer; margin-right: 0.5rem; font-size: 0.95rem; }
+  .button-row { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.5rem; }
+  .button-row:last-of-type { margin-bottom: 0; }
+  button { background: #2a6b3f; border: none; color: white; padding: 0.5rem 1.1rem; border-radius: 4px; cursor: pointer; font-size: 0.95rem; }
   button.danger { background: #6b2a2a; }
   #message { color: #999; font-size: 0.85rem; margin-top: 0.6rem; min-height: 1.2em; }
 </style>
@@ -165,6 +189,7 @@ _PAGE = """<!doctype html>
   <div class="row"><span>State</span><span id="state" class="state">–</span></div>
   <div class="row"><span>Iteration</span><span id="iteration">–</span></div>
   <div class="row"><span>Error</span><span id="error">–</span></div>
+  <div class="row"><span>Target</span><span id="target">–</span></div>
   <div class="row"><span>Last solve</span><span id="solve">–</span></div>
   <div class="row"><span>Uptime</span><span id="uptime">–</span></div>
 </div>
@@ -173,13 +198,22 @@ _PAGE = """<!doctype html>
   <div class="row"><span>Mount UTC date/time</span><span id="utc-date">–</span></div>
   <div class="row"><span>Sync points</span><span id="sync-point-count">–</span></div>
   <div class="row"><span>Park state</span><span id="at-park">–</span></div>
+  <div class="row">
+    <span>Auto-correction (nudge to cedar)</span>
+    <span><input type="checkbox" id="correction-toggle" onchange="setCorrection(this.checked)"></span>
+  </div>
 </div>
 <div class="card">
-  <button onclick="post('/api/ui/actions/sync-now')">Sync now</button>
-  <button class="danger" onclick="post('/api/ui/actions/abort')">Abort</button>
-  <button onclick="post('/api/ui/actions/park')">Park</button>
-  <button onclick="post('/api/ui/actions/unpark')">Unpark</button>
-  <button class="danger" onclick="clearSyncPoints()">Clear sync points</button>
+  <div class="button-row">
+    <button onclick="post('/api/ui/actions/park')">Park</button>
+    <button onclick="post('/api/ui/actions/unpark')">Unpark</button>
+    <button class="danger" onclick="post('/api/ui/actions/abort')">Abort</button>
+  </div>
+  <div class="button-row">
+    <button onclick="post('/api/ui/actions/sync-now')">Sync now (cedar solve)</button>
+    <button onclick="post('/api/ui/actions/sync-to-target')">Sync to target</button>
+    <button class="danger" onclick="clearSyncPoints()">Clear sync points</button>
+  </div>
   <div id="message"></div>
 </div>
 <script>
@@ -192,6 +226,9 @@ es.onmessage = (e) => {
   stateEl.className = 'state state-' + s.state;
   document.getElementById('iteration').textContent = s.iteration ?? '–';
   document.getElementById('error').textContent = (s.error_arcmin != null) ? s.error_arcmin.toFixed(2) + "'" : '–';
+  document.getElementById('target').textContent = s.last_target
+    ? 'RA ' + (s.last_target.ra_deg / 15).toFixed(3) + 'h Dec ' + s.last_target.dec_deg.toFixed(3) + '°'
+    : '–';
   document.getElementById('solve').textContent = s.last_solve
     ? 'RA ' + (s.last_solve.sky_coord.ra_deg / 15).toFixed(3) + 'h Dec ' + s.last_solve.sky_coord.dec_deg.toFixed(3) + '°'
     : '–';
@@ -205,6 +242,7 @@ es.onmessage = (e) => {
     ? info.sync_point_count
     : (info ? 'not supported' : '–');
   document.getElementById('at-park').textContent = info ? (info.at_park ? 'parked' : 'not parked') : '–';
+  document.getElementById('correction-toggle').checked = !!s.correction_enabled;
 };
 function formatUptime(totalSeconds) {
   const s = Math.floor(totalSeconds);
@@ -226,6 +264,15 @@ function clearSyncPoints() {
   if (confirm('Clear all mount sync points? This cannot be undone.')) {
     post('/api/ui/actions/clear-sync-points');
   }
+}
+async function setCorrection(enabled) {
+  const r = await fetch('/api/ui/actions/correction', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+    body: 'enabled=' + enabled,
+  });
+  const body = await r.json();
+  document.getElementById('message').textContent = body.message || (body.ok ? 'OK' : 'failed');
 }
 </script>
 </body>

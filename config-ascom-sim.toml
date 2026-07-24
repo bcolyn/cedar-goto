@@ -20,11 +20,10 @@ alpaca_port = 11111
 discovery = true
 
 [loop]
-strategy = "offset"
 tolerance_arcmin = 1.0
+# max_correction_arcmin = 30.0
 max_iterations = 3
 settle_ms = 1500
-final_sync = true
 
 [solve]
 min_matches = 10

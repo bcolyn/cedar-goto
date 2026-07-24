@@ -66,10 +66,9 @@ class World:
     alignment_offset_ra_deg: float = 0.0
     alignment_offset_dec_deg: float = 0.0
     """Cumulative correction learned from Sync calls — models a mount's internal
-    alignment model, which a real Sync recalibrates (DESIGN.md §5 sync_reslew
-    strategy). Without this, sync_reslew could never converge in simulation:
-    re-commanding the same target would reproduce the exact same deterministic
-    error every time."""
+    alignment model, which a real Sync recalibrates. Exercises the manual
+    "sync now"/"sync to target" web UI actions (ClosedLoopTelescopeBackend)
+    against the mock harness."""
 
     _last_commanded: CelestialCoord | None = None
 

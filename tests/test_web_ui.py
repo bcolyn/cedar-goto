@@ -77,6 +77,67 @@ async def test_sync_now_action():
         assert "RA" in body["message"]
 
 
+async def test_sync_to_target_action_reports_no_target_yet():
+    world = World()
+    async with make_client(world) as client:
+        resp = await client.post("/api/ui/actions/sync-to-target")
+        body = resp.json()
+        assert body["ok"] is False
+
+
+async def test_sync_to_target_action_syncs_to_the_commanded_target_not_the_solve():
+    world = World(error_model=HarmonicErrorModel())
+    async with make_client(world) as client:
+        await client.put("/api/v1/telescope/0/connected", data={"Connected": "true"})
+        await client.put(
+            "/api/v1/telescope/0/slewtocoordinatesasync",
+            data={"RightAscension": "4.0", "Declination": "15.0"},
+        )
+        for _ in range(200):
+            await asyncio.sleep(0.02)
+            if (await client.get("/api/v1/telescope/0/slewing")).json()["Value"] is False:
+                break
+        else:
+            pytest.fail("slew never settled")
+
+        resp = await client.post("/api/ui/actions/sync-to-target")
+        body = resp.json()
+        assert body["ok"] is True
+        assert "RA 4.000h Dec 15.000" in body["message"]
+
+
+async def test_correction_toggle_reflected_in_status_and_disables_the_loop():
+    world = World(error_model=HarmonicErrorModel())
+    async with make_client(world) as client:
+        status = (await client.get("/api/ui/status")).json()
+        assert status["correction_enabled"] is True
+
+        resp = await client.post("/api/ui/actions/correction", data={"enabled": "false"})
+        assert resp.json()["ok"] is True
+        status = (await client.get("/api/ui/status")).json()
+        assert status["correction_enabled"] is False
+
+        await client.put("/api/v1/telescope/0/connected", data={"Connected": "true"})
+        await client.put(
+            "/api/v1/telescope/0/slewtocoordinatesasync",
+            data={"RightAscension": "4.0", "Declination": "15.0"},
+        )
+        # No closed loop should ever run -- state stays IDLE throughout.
+        for _ in range(20):
+            await asyncio.sleep(0.02)
+            assert (await client.get("/api/ui/status")).json()["state"] == "IDLE"
+
+        for _ in range(200):
+            await asyncio.sleep(0.02)
+            if (await client.get("/api/v1/telescope/0/slewing")).json()["Value"] is False:
+                break
+        else:
+            pytest.fail("bare slew never settled")
+
+        status = (await client.get("/api/ui/status")).json()
+        assert status["last_target"]["ra_deg"] == pytest.approx(60.0)
+
+
 async def test_status_includes_mount_info_with_sync_points_unsupported_by_mock():
     world = World()
     async with make_client(world) as client:

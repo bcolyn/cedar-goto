@@ -14,7 +14,7 @@ import uvicorn
 
 from cedar_goto.adapters.buzzer import build_buzzer
 from cedar_goto.config import Config
-from cedar_goto.core.loop import LoopConfigCore, SlewStrategy
+from cedar_goto.core.loop import LoopConfigCore
 from cedar_goto.core.solve import SolveAcceptance
 from cedar_goto.web.app import create_app
 from cedar_goto.web.backend import TelescopeBackend
@@ -26,11 +26,10 @@ logger = logging.getLogger(__name__)
 
 def _loop_config(config: Config) -> LoopConfigCore:
     return LoopConfigCore(
-        strategy=SlewStrategy(config.loop.strategy),
         tolerance_arcmin=config.loop.tolerance_arcmin,
+        max_correction_arcmin=config.loop.max_correction_arcmin,
         max_iterations=config.loop.max_iterations,
         settle_s=config.loop.settle_ms / 1000.0,
-        final_sync=config.loop.final_sync,
     )
 
 
@@ -114,6 +113,7 @@ def _build_backend(config: Config) -> TelescopeBackend:
         _solve_acceptance(config),
         config.position,
         buzzer=build_buzzer(config.buzzer),
+        correction_enabled=config.loop.correction_enabled,
     )
 
 

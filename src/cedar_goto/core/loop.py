@@ -22,23 +22,25 @@ class LoopState(Enum):
     AWAIT_SOLVE = auto()
     EVALUATE = auto()
     CONVERGED = auto()
+    OUT_OF_RANGE = auto()
     FAILED = auto()
-
-
-class SlewStrategy(str, Enum):
-    OFFSET = "offset"
-    SYNC_RESLEW = "sync_reslew"
 
 
 @dataclass(frozen=True, slots=True)
 class LoopConfigCore:
     """Loop tuning parameters, decoupled from the pydantic config module."""
 
-    strategy: SlewStrategy = SlewStrategy.OFFSET
     tolerance_arcmin: float = 1.0
+    """Below this, the loop stops nudging and reports CONVERGED -- the
+    "min_move" below which further correction isn't worth another slew."""
+    max_correction_arcmin: float | None = None
+    """Above this, the loop refuses to nudge at all and reports
+    OUT_OF_RANGE instead -- a solve this far off the requested target is
+    more likely a bad solve/mismatch than real pointing error, and blindly
+    slewing on it is the wrong call. None disables the check (unbounded
+    nudging, the historical behavior)."""
     max_iterations: int = 3
     settle_s: float = 1.5
-    final_sync: bool = True
     mount_slewing_poll_interval_s: float = 0.25
     mount_slewing_timeout_s: float = 120.0
     solve_wait_timeout_s: float = 15.0
@@ -121,19 +123,28 @@ class ClosedLoopSlew:
             )
 
             if error_arcmin <= self._config.tolerance_arcmin:
-                message = "converged"
-                if self._config.final_sync:
-                    if solve.is_plate_solve:
-                        await self._mount.sync_to(true_target)
-                    else:
-                        # Never sync the mount's persistent alignment/sync-
-                        # point database against a non-independent solve
-                        # (e.g. MountEchoCedar's loopback) -- see
-                        # SolveResult.is_plate_solve.
-                        message = "converged (sync skipped: solve source is not a real plate solve)"
+                # No automatic sync here -- a plate solve this close is still
+                # not proof the mount is centered on `true_target` for the
+                # user's actual optical path (e.g. a finder-scope/main-scope
+                # offset), only that cedar thinks it is. See
+                # ClosedLoopTelescopeBackend.sync_to_target() for the
+                # manual, user-confirmed sync this replaced.
                 yield LoopStatus(
                     LoopState.CONVERGED, iteration, true_target, commanded, solve, error_arcmin,
-                    message=message,
+                    message="converged",
+                )
+                return
+
+            if (
+                self._config.max_correction_arcmin is not None
+                and error_arcmin > self._config.max_correction_arcmin
+            ):
+                yield LoopStatus(
+                    LoopState.OUT_OF_RANGE, iteration, true_target, commanded, solve, error_arcmin,
+                    message=(
+                        f"error {error_arcmin:.1f}' exceeds max_correction_arcmin "
+                        f"({self._config.max_correction_arcmin:.1f}') -- not nudging automatically"
+                    ),
                 )
                 return
 
@@ -145,22 +156,7 @@ class ClosedLoopSlew:
                 )
                 return
 
-            commanded = self._correct(self._config.strategy, true_target, commanded, actual)
-            if self._config.strategy is SlewStrategy.SYNC_RESLEW and solve.is_plate_solve:
-                await self._mount.sync_to(actual)
-
-    @staticmethod
-    def _correct(
-        strategy: SlewStrategy,
-        true_target: CelestialCoord,
-        commanded: CelestialCoord,
-        actual: CelestialCoord,
-    ) -> CelestialCoord:
-        if strategy is SlewStrategy.OFFSET:
-            return offset_correction(true_target, commanded, actual)
-        # sync_reslew: mount has just been sync'd to `actual` externally (see run());
-        # re-commanding the true target lets the mount's own alignment model close the gap.
-        return true_target
+            commanded = offset_correction(true_target, commanded, actual)
 
     async def _wait_for_settle(self) -> None:
         deadline = time.monotonic() + self._config.mount_slewing_timeout_s

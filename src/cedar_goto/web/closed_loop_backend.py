@@ -50,6 +50,7 @@ class ClosedLoopTelescopeBackend:
         acceptance: SolveAcceptance,
         position_config: PositionSourceConfig,
         buzzer: Buzzer | None = None,
+        correction_enabled: bool = True,
     ) -> None:
         self._inner = inner
         self._mount = mount
@@ -61,14 +62,33 @@ class ClosedLoopTelescopeBackend:
         self._task: asyncio.Task | None = None
         self._current_loop: ClosedLoopSlew | None = None
         self._last_status: LoopStatus | None = None
+        self._last_target: CelestialCoord | None = None
+        self._correction_enabled = correction_enabled
 
     @property
     def last_status(self) -> LoopStatus | None:
         return self._last_status
 
+    def set_correction_enabled(self, enabled: bool) -> None:
+        """Web UI "auto-correction" toggle. Takes effect on the *next* slew
+        only -- doesn't abort a closed-loop slew already in progress. With
+        correction off, SlewToCoordinates(Async) is a bare proxy to `inner`
+        (Phase 1 behavior): no cedar feedback, no nudging, just the GoTo as
+        commanded -- for when cedar's solves aren't trustworthy enough to
+        act on automatically right now, without having to restart the
+        service to change config."""
+        self._correction_enabled = enabled
+
     async def get(self, member: Member):
         if member.name == "Slewing":
-            return self._loop_active()
+            if self._loop_active():
+                return True
+            if not self._correction_enabled:
+                # No loop task drives Slewing while correction is off (see
+                # _start_slew) -- fall back to the mount's own idea of
+                # whether it's still moving, same as a plain proxy.
+                return await self._inner.get(member)
+            return False
         if member.name in ("RightAscension", "Declination") and self._position_config.source != "mount":
             position = await self._cedar_position()
             if position is not None:
@@ -78,7 +98,7 @@ class ClosedLoopTelescopeBackend:
 
     async def put(self, member: Member, params: dict):
         if member.name in _SLEW_MEMBERS:
-            return await self._start_slew(params, wait=(member.name == "SlewToCoordinates"))
+            return await self._start_slew(member, params, wait=(member.name == "SlewToCoordinates"))
         if member.name == "AbortSlew":
             # abort() alone is only a cooperative signal -- confirmed live
             # that a task blocked inside a solve-wait RPC stays in
@@ -113,10 +133,11 @@ class ClosedLoopTelescopeBackend:
     def _loop_active(self) -> bool:
         return self._task is not None and not self._task.done()
 
-    async def _start_slew(self, params: dict, wait: bool):
+    async def _start_slew(self, member: Member, params: dict, wait: bool):
         target = CelestialCoord(
             ra_deg=params["RightAscension"] * 15.0, dec_deg=params["Declination"], epoch=J2000
         )
+        self._last_target = target
         if self._loop_active():
             # A new slew supersedes whatever's in progress -- abort it and
             # wait for the task to actually stop before starting the next.
@@ -125,6 +146,12 @@ class ClosedLoopTelescopeBackend:
             self._current_loop.abort()
             self._task.cancel()
             await asyncio.gather(self._task, return_exceptions=True)
+
+        if not self._correction_enabled:
+            # Bare proxy slew, same as before the closed loop existed --
+            # remembers the target (for a later manual "sync to target")
+            # but applies no cedar-driven correction at all.
+            return await self._inner.put(member, params)
 
         self._current_loop = ClosedLoopSlew(self._mount, self._cedar, self._loop_config, self._acceptance)
         self._task = asyncio.create_task(self._run_loop(self._current_loop, target))
@@ -207,19 +234,46 @@ class ClosedLoopTelescopeBackend:
         await self._mount.sync_to(solve.sky_coord)
         return solve
 
+    async def sync_to_target(self) -> CelestialCoord | None:
+        """Web UI "sync to target" action: the user has manually centered
+        the requested target in the main scope (whether the closed loop got
+        it close via cedar's plate solves, or the slew was a bare proxy with
+        correction disabled) and confirms the mount is now actually there.
+        Syncs to the originally-commanded coordinate, not to cedar's solve --
+        deliberately independent of cedar, since cedar's own solve may be
+        systematically offset from the main scope's optical axis (e.g. a
+        mechanically misaligned finder box) and is exactly what a human
+        centering in the main scope corrects for.
+
+        Returns the target synced to, or None if there's no completed slew
+        to sync to yet, or one is still in progress (synced while it's
+        still moving the mount out from under the user)."""
+        if self._loop_active() or self._last_target is None:
+            return None
+        target = self._last_target
+        await self._mount.sync_to(target)
+        return target
+
     def status_snapshot(self) -> dict:
         status = self._last_status
-        if status is None:
-            return {"state": "IDLE"}
-        return {
-            "state": status.state.name,
-            "iteration": status.iteration,
-            "true_target": _coord_dict(status.true_target),
-            "commanded": _coord_dict(status.commanded) if status.commanded else None,
-            "error_arcmin": status.error_arcmin,
-            "message": status.message,
-            "last_solve": _solve_dict(status.last_solve) if status.last_solve else None,
+        result: dict = {
+            "correction_enabled": self._correction_enabled,
+            "last_target": _coord_dict(self._last_target) if self._last_target else None,
         }
+        if status is None:
+            result["state"] = "IDLE"
+            return result
+        result.update(
+            {
+                "state": status.state.name,
+                "iteration": status.iteration,
+                "commanded": _coord_dict(status.commanded) if status.commanded else None,
+                "error_arcmin": status.error_arcmin,
+                "message": status.message,
+                "last_solve": _solve_dict(status.last_solve) if status.last_solve else None,
+            }
+        )
+        return result
 
     async def _cedar_position(self) -> tuple[float, float] | None:
         """DESIGN.md §3 "Reported position": cedar-preferred with mount

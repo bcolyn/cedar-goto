@@ -64,13 +64,16 @@ For a real mount, two backends are available:
   envelopes) against the same mock, via an in-process ASGI client (no real
   HTTP/sockets).
 - `tests/test_closed_loop_alpaca.py` -- the closed loop driven through the
-  HTTP layer (`SlewToCoordinatesAsync` -> `Slewing` -> converged position,
-  both strategies), abort, a new slew superseding one in progress, cedar-
-  preferred position reporting, and the give-up paths (persistent solve
-  rejection, non-convergence, unexpected mount/cedar errors) -- including
-  that a fresh slew works normally after a prior one failed.
+  HTTP layer (`SlewToCoordinatesAsync` -> `Slewing` -> converged position),
+  the auto-correction toggle (bare-proxy slew when disabled, doesn't abort
+  an in-progress corrected slew), abort, a new slew superseding one in
+  progress, cedar-preferred position reporting, and the give-up paths
+  (persistent solve rejection, non-convergence, unexpected mount/cedar
+  errors) -- including that a fresh slew works normally after a prior one
+  failed.
 - `tests/test_web_ui.py` -- the web UI's status/SSE snapshot (including
-  mount info) and its sync-now/abort/park/unpark/clear-sync-points actions.
+  mount info) and its sync-now/sync-to-target/abort/park/unpark/
+  clear-sync-points/correction-toggle actions.
 - `tests/test_buzzer.py` -- the buzzer factory's graceful fallback with no
   GPIO hardware, and that the closed loop actually calls success()/
   failure() at the right times.
@@ -100,8 +103,8 @@ src/cedar_goto/
     management.py   # /management/* endpoints
     discovery.py    # UDP discovery responder (port 32227)
     http_utils.py   # shared Alpaca HTTP request/response plumbing
-    ui.py           # web UI: status/SSE, mount info,
-                     # sync-now/abort/park/unpark/clear-sync-points
+    ui.py           # web UI: status/SSE, mount info, auto-correction toggle,
+                     # sync-now/sync-to-target/abort/park/unpark/clear-sync-points
     app.py          # FastAPI app assembly
   adapters/
     mock/           # World + MockMount + MockCedar + MockTelescopeBackend
@@ -139,17 +142,41 @@ state/iteration/error/last-solve via SSE, plus mount info -- location,
 mount UTC date/time, sync-point count, park state). No build step, no
 external assets/CDN, so it works standalone on a Pi with no internet.
 
-Actions: **Sync now** (syncs the mount to cedar's current solve, bypassing
-the closed loop), **Abort**, **Park**/**Unpark**, and **Clear sync points**.
-Park aborts any in-flight closed-loop slew first. Sync now (and any
-mount.sync_to() call from the closed loop itself) refuses to run against a
-solve that isn't a real plate solve (e.g. the `MountEchoCedar` loopback used
-to exercise a real mount without a working cedar-server) -- otherwise it'd
-calibrate the mount's persistent alignment/sync-point database against its
-own already-possibly-wrong belief instead of real sky data. Sync-point count
-and Clear are INDI-specific (no ASCOM Alpaca equivalent exists); they show
-as "not supported" against the `alpyca`/`mock` backends. Location and mount
-UTC date/time work identically against any backend.
+Actions: **Sync now (cedar solve)** (syncs the mount straight to cedar's
+current solve, bypassing the closed loop), **Sync to target**, **Abort**,
+**Park**/**Unpark**, and **Clear sync points**. Park aborts any in-flight
+closed-loop slew first.
+
+The closed loop itself never syncs the mount on its own anymore: a plate
+solve landing within `tolerance_arcmin` only proves cedar thinks the mount
+is on target, not that it actually is for your optical path (a cedar box
+mechanically offset from the main scope will confidently agree with itself
+while still being wrong -- confirmed on-sky 2026-07-23, and exactly what
+corrupted a real mount's own accurate alignment model). Instead: the closed
+loop nudges the mount (via cedar's plate solves) only while the measured
+error is between `tolerance_arcmin` ("min_move") and `max_correction_arcmin`
+("max_move", disabled by default -- see config.toml) -- above that, it
+reports **OUT_OF_RANGE** and does nothing further automatically, since an
+error that large is more likely a bad solve than real pointing error.
+Center the target in the main scope by hand, then press **Sync to target**
+to sync the mount to the coordinate you originally requested (not to
+cedar's solve). **Sync now (cedar solve)** and any automatic mount.sync_to()
+still refuse to run against a solve that isn't a real plate solve (e.g. the
+`MountEchoCedar` loopback used to exercise a real mount without a working
+cedar-server) -- otherwise it'd calibrate the mount's persistent
+alignment/sync-point database against its own already-possibly-wrong belief
+instead of real sky data.
+
+An **auto-correction** toggle on the dashboard disables the closed loop
+entirely at runtime (no restart needed): with it off, SlewToCoordinates(Async)
+is a bare proxy straight to the mount, same as before the closed loop
+existed -- for when cedar's solves aren't trustworthy enough to act on right
+now. cedar-goto still remembers the commanded target either way, so **Sync
+to target** keeps working after a bare slew too.
+
+Sync-point count and Clear are INDI-specific (no ASCOM Alpaca equivalent
+exists); they show as "not supported" against the `alpyca`/`mock` backends.
+Location and mount UTC date/time work identically against any backend.
 
 The GPIO buzzer (`[buzzer]` in config) is a soft dependency by design: it's
 an optional extra (`pip install cedar-goto[buzzer]`), gpiozero is imported
