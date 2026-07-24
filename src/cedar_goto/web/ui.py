@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -23,6 +24,8 @@ from cedar_goto.web.alpaca_spec import ALL_MEMBERS_BY_ACTION
 from cedar_goto.web.closed_loop_backend import SyncRefused
 
 router = APIRouter()
+
+_PROCESS_START_TIME = time.monotonic()
 
 _CONNECTED_MEMBER = ALL_MEMBERS_BY_ACTION["connected"]
 _SITE_LATITUDE_MEMBER = ALL_MEMBERS_BY_ACTION["sitelatitude"]
@@ -38,6 +41,7 @@ async def _snapshot(backend) -> dict:
     snapshot = backend.status_snapshot()
     snapshot["connected"] = await backend.get(_CONNECTED_MEMBER)
     snapshot["mount_info"] = await _mount_info(backend)
+    snapshot["uptime_s"] = time.monotonic() - _PROCESS_START_TIME
     return snapshot
 
 
@@ -162,6 +166,7 @@ _PAGE = """<!doctype html>
   <div class="row"><span>Iteration</span><span id="iteration">–</span></div>
   <div class="row"><span>Error</span><span id="error">–</span></div>
   <div class="row"><span>Last solve</span><span id="solve">–</span></div>
+  <div class="row"><span>Uptime</span><span id="uptime">–</span></div>
 </div>
 <div class="card">
   <div class="row"><span>Location</span><span id="location">–</span></div>
@@ -190,6 +195,7 @@ es.onmessage = (e) => {
   document.getElementById('solve').textContent = s.last_solve
     ? 'RA ' + (s.last_solve.sky_coord.ra_deg / 15).toFixed(3) + 'h Dec ' + s.last_solve.sky_coord.dec_deg.toFixed(3) + '°'
     : '–';
+  document.getElementById('uptime').textContent = (s.uptime_s != null) ? formatUptime(s.uptime_s) : '–';
   const info = s.mount_info;
   document.getElementById('location').textContent = info
     ? info.site_latitude_deg.toFixed(4) + '°, ' + info.site_longitude_deg.toFixed(4) + '°, ' + info.site_elevation_m.toFixed(0) + 'm'
@@ -200,6 +206,17 @@ es.onmessage = (e) => {
     : (info ? 'not supported' : '–');
   document.getElementById('at-park').textContent = info ? (info.at_park ? 'parked' : 'not parked') : '–';
 };
+function formatUptime(totalSeconds) {
+  const s = Math.floor(totalSeconds);
+  const days = Math.floor(s / 86400);
+  const hours = Math.floor((s % 86400) / 3600);
+  const minutes = Math.floor((s % 3600) / 60);
+  const seconds = s % 60;
+  if (days > 0) return days + 'd ' + hours + 'h ' + minutes + 'm';
+  if (hours > 0) return hours + 'h ' + minutes + 'm';
+  if (minutes > 0) return minutes + 'm ' + seconds + 's';
+  return seconds + 's';
+}
 async function post(url) {
   const r = await fetch(url, {method: 'POST'});
   const body = await r.json();
