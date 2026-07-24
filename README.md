@@ -167,6 +167,19 @@ cedar-server) -- otherwise it'd calibrate the mount's persistent
 alignment/sync-point database against its own already-possibly-wrong belief
 instead of real sky data.
 
+Since cedar-goto intercepts the ASCOM slew and drives the mount itself,
+cedar-server has no way to know a GoTo is happening unless told -- so every
+slew calls cedar-server's `InitiateAction(initiate_slew=...)` (found missing
+2026-07-24), letting it offer its own push-to guidance (the `SlewRequest`
+fields in `FrameResult` -- distance/angle to target -- as shown by Cedar
+Aim's live view) for manually nudging the mount, e.g. via a handset or an
+LX200 bridge. This stays active through `CONVERGED`/`FAILED`/`OUT_OF_RANGE`
+-- the whole point of the design above is that a human may still need to
+nudge onto target afterward -- and is only cleared (`stop_slew`) by
+Abort/Park or by pressing **Sync to target**. Best-effort: a cedar-server
+error here is logged and swallowed, never breaks the actual slew.
+`MockCedar`/`MountEchoCedar` no-op this (nothing real to notify).
+
 An **auto-correction** toggle on the dashboard disables the closed loop
 entirely at runtime (no restart needed): with it off, SlewToCoordinates(Async)
 is a bare proxy straight to the mount, same as before the closed loop

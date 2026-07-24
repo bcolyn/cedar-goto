@@ -45,3 +45,20 @@ class SolveSource(Protocol):
     async def get_latest_solve(self) -> SolveResult | None:
         """Most recent solve, or None if none yet / stale. Used for idle-position reporting."""
         ...
+
+    async def notify_slew_started(self, target: CelestialCoord) -> None:
+        """Tell cedar-server a GoTo to `target` is starting (cedar.proto
+        ActionRequest.initiate_slew), so it can offer push-to guidance
+        (SlewRequest fields in FrameResult) via its own display -- e.g.
+        Cedar Aim. cedar-goto's closed loop drives the mount itself, so
+        without this cedar-server has no idea a slew is even happening.
+        Must not raise -- a solve source with no real cedar-server to
+        notify (mock/echo) is a no-op, and a real one degrades to a no-op
+        with a logged warning rather than breaking the actual slew."""
+        ...
+
+    async def notify_slew_stopped(self) -> None:
+        """Tell cedar-server the slew is finished/discontinued (cedar.proto
+        ActionRequest.stop_slew), clearing any push-to guidance it was
+        showing. Same no-raise contract as notify_slew_started()."""
+        ...

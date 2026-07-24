@@ -110,6 +110,7 @@ class ClosedLoopTelescopeBackend:
                 self._current_loop.abort()
                 self._task.cancel()
                 await asyncio.gather(self._task, return_exceptions=True)
+                await self._cedar.notify_slew_stopped()
             return await self._inner.put(member, params)
         if member.name == "Park":
             # Parking mid-slew must not race the loop's next slew_to/sync_to
@@ -124,6 +125,7 @@ class ClosedLoopTelescopeBackend:
                 self._current_loop.abort()
                 self._task.cancel()
                 await asyncio.gather(self._task, return_exceptions=True)
+                await self._cedar.notify_slew_stopped()
             return await self._inner.put(member, params)
         return await self._inner.put(member, params)
 
@@ -138,6 +140,16 @@ class ClosedLoopTelescopeBackend:
             ra_deg=params["RightAscension"] * 15.0, dec_deg=params["Declination"], epoch=J2000
         )
         self._last_target = target
+        # cedar-goto intercepts the ASCOM slew and drives the mount itself,
+        # so without this cedar-server never learns a GoTo is happening and
+        # can't offer its own push-to guidance (SlewRequest fields in
+        # FrameResult) -- e.g. for a client jogging the mount by hand while
+        # watching cedar's live view. Left active (no notify_slew_stopped
+        # here) through CONVERGED/FAILED/OUT_OF_RANGE -- the whole point of
+        # this design is that the human may still need to nudge onto target
+        # after the automatic correction is done. Cleared explicitly by
+        # AbortSlew/Park or once the user confirms via sync_to_target().
+        await self._cedar.notify_slew_started(target)
         if self._loop_active():
             # A new slew supersedes whatever's in progress -- abort it and
             # wait for the task to actually stop before starting the next.
@@ -252,6 +264,7 @@ class ClosedLoopTelescopeBackend:
             return None
         target = self._last_target
         await self._mount.sync_to(target)
+        await self._cedar.notify_slew_stopped()
         return target
 
     def status_snapshot(self) -> dict:

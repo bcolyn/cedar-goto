@@ -16,12 +16,16 @@ sync-point database with circular, non-independent data.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from typing import AsyncIterator
 
 from cedar_goto.core._precession import precess_to_j2000
+from cedar_goto.core.coords import CelestialCoord
 from cedar_goto.core.ports import MountControl, SolveSource
 from cedar_goto.core.solve import SolveResult
+
+logger = logging.getLogger(__name__)
 
 
 class MountEchoCedar(SolveSource):
@@ -47,3 +51,16 @@ class MountEchoCedar(SolveSource):
             if solve is not None:
                 yield solve
             await asyncio.sleep(self._poll_interval_s)
+
+    async def notify_slew_started(self, target: CelestialCoord) -> None:
+        # No real cedar-server here to notify -- log it so this doesn't
+        # look like push-to guidance should be working while testing
+        # against a real mount without a working cedar-server.
+        logger.info(
+            "MountEchoCedar: not notifying cedar-server of slew to RA %.4f Dec %.4f "
+            "(no real cedar-server here -- push-to guidance won't activate)",
+            target.ra_deg, target.dec_deg,
+        )
+
+    async def notify_slew_stopped(self) -> None:
+        logger.info("MountEchoCedar: not notifying cedar-server that the slew stopped (no real cedar-server here)")

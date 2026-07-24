@@ -15,6 +15,8 @@ class MockCedar(SolveSource):
     def __init__(self, world: World, solve_interval_s: float = 0.05) -> None:
         self._world = world
         self._solve_interval_s = solve_interval_s
+        self.slew_started_calls: list[CelestialCoord] = []
+        self.slew_stopped_count = 0
 
     def _make_solve(self) -> SolveResult:
         if self._world.solve_failure_countdown > 0:
@@ -52,3 +54,9 @@ class MockCedar(SolveSource):
         if self._world.is_slewing():
             return None
         return self._make_solve()
+
+    async def notify_slew_started(self, target: CelestialCoord) -> None:
+        self.slew_started_calls.append(target)
+
+    async def notify_slew_stopped(self) -> None:
+        self.slew_stopped_count += 1

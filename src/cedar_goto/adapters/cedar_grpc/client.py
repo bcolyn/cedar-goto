@@ -16,14 +16,17 @@ without needing the missing streaming method.
 """
 from __future__ import annotations
 
+import logging
 from typing import AsyncIterator
 
 import grpc
 
-from cedar_goto.adapters.cedar_grpc.generated import cedar_pb2, cedar_pb2_grpc
+from cedar_goto.adapters.cedar_grpc.generated import cedar_common_pb2, cedar_pb2, cedar_pb2_grpc
 from cedar_goto.core.coords import CelestialCoord
 from cedar_goto.core.ports import SolveSource
 from cedar_goto.core.solve import SolveResult
+
+logger = logging.getLogger(__name__)
 
 
 def _to_solve_result(frame: cedar_pb2.FrameResult) -> SolveResult | None:
@@ -69,3 +72,25 @@ class CedarGrpcClient(SolveSource):
         request = cedar_pb2.FrameRequest(non_blocking=True)
         frame = await self._stub.GetFrame(request)
         return _to_solve_result(frame)
+
+    async def notify_slew_started(self, target: CelestialCoord) -> None:
+        """Lets cedar-server offer push-to guidance (SlewRequest fields in
+        FrameResult) for a slew cedar-goto's own closed loop is driving --
+        without this, cedar-server has no idea a slew is happening at all,
+        since cedar-goto intercepts the ASCOM slew instead of forwarding it.
+        Best-effort: a failure here must not break the actual mount
+        nudging, which doesn't depend on cedar-server knowing about it."""
+        try:
+            await self._stub.InitiateAction(
+                cedar_pb2.ActionRequest(
+                    initiate_slew=cedar_common_pb2.CelestialCoord(ra=target.ra_deg, dec=target.dec_deg)
+                )
+            )
+        except grpc.RpcError as exc:
+            logger.warning("cedar-server InitiateAction(initiate_slew) failed: %r", exc)
+
+    async def notify_slew_stopped(self) -> None:
+        try:
+            await self._stub.InitiateAction(cedar_pb2.ActionRequest(stop_slew=True))
+        except grpc.RpcError as exc:
+            logger.warning("cedar-server InitiateAction(stop_slew) failed: %r", exc)

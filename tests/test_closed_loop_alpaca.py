@@ -79,6 +79,45 @@ async def test_slew_converges_and_slewing_reflects_the_loop():
         # harmonic-error single slew (~2-3 arcmin uncorrected).
         assert backend.last_status.error_arcmin <= 1.0
 
+        # cedar-server must learn a slew is happening (push-to guidance) --
+        # and it should stay "active" through convergence, since the human
+        # may still need to nudge onto target by hand afterward.
+        assert len(backend._cedar.slew_started_calls) == 1
+        assert backend._cedar.slew_started_calls[0].ra_deg == pytest.approx(120.0)
+        assert backend._cedar.slew_started_calls[0].dec_deg == pytest.approx(30.0)
+        assert backend._cedar.slew_stopped_count == 0
+
+
+async def test_abort_notifies_cedar_the_slew_stopped():
+    world = World(error_model=HarmonicErrorModel())
+    backend = make_backend(world, max_iterations=10)
+    async with await make_client(backend) as client:
+        await client.put("/api/v1/telescope/0/connected", data={"Connected": "true"})
+        await client.put(
+            "/api/v1/telescope/0/slewtocoordinatesasync",
+            data={"RightAscension": "8.0", "Declination": "30.0"},
+        )
+        assert (await client.get("/api/v1/telescope/0/slewing")).json()["Value"] is True
+
+        resp = await client.put("/api/v1/telescope/0/abortslew")
+        assert resp.json()["ErrorNumber"] == 0
+
+        assert backend._cedar.slew_stopped_count == 1
+
+
+async def test_sync_to_target_notifies_cedar_the_slew_stopped():
+    world = World(error_model=HarmonicErrorModel())
+    backend = make_backend(world)
+    async with await make_client(backend) as client:
+        await client.put("/api/v1/telescope/0/connected", data={"Connected": "true"})
+        await _slew_and_wait(client, 8.0, 30.0)
+        assert backend.last_status.state.name == "CONVERGED"
+        assert backend._cedar.slew_stopped_count == 0
+
+        target = await backend.sync_to_target()
+        assert target is not None
+        assert backend._cedar.slew_stopped_count == 1
+
 
 async def test_abort_slew_stops_the_loop():
     world = World(error_model=HarmonicErrorModel())
