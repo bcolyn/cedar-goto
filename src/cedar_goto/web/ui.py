@@ -21,7 +21,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from cedar_goto.web.alpaca_errors import AlpacaError
 from cedar_goto.web.alpaca_spec import ALL_MEMBERS_BY_ACTION
-from cedar_goto.web.closed_loop_backend import SyncRefused
+from cedar_goto.web.closed_loop_backend import CorrectionRefused, SyncRefused
 
 router = APIRouter()
 
@@ -37,10 +37,22 @@ _PARK_MEMBER = ALL_MEMBERS_BY_ACTION["park"]
 _UNPARK_MEMBER = ALL_MEMBERS_BY_ACTION["unpark"]
 
 
+_MOUNT_INFO_TIMEOUT_S = 1.5
+
+
 async def _snapshot(backend) -> dict:
     snapshot = backend.status_snapshot()
     snapshot["connected"] = await backend.get(_CONNECTED_MEMBER)
-    snapshot["mount_info"] = await _mount_info(backend)
+    # _mount_info can block for IndiConnection's full 10s property-wait timeout
+    # when nothing is Alpaca-connected yet (confirmed live: SSE ticks landing
+    # ~10.5s apart instead of the intended 0.5s). Capping it here keeps every
+    # other field -- correction_enabled, state, etc. -- flowing at full speed;
+    # a timed-out tick just reports mount_info as unavailable and retries next
+    # tick, same as any other _mount_info failure.
+    try:
+        snapshot["mount_info"] = await asyncio.wait_for(_mount_info(backend), timeout=_MOUNT_INFO_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        snapshot["mount_info"] = None
     snapshot["uptime_s"] = time.monotonic() - _PROCESS_START_TIME
     return snapshot
 
@@ -150,6 +162,20 @@ async def action_sync_to_target(request: Request) -> JSONResponse:
     )
 
 
+@router.post("/api/ui/actions/correct-now")
+async def action_correct_now(request: Request) -> JSONResponse:
+    try:
+        target = await request.app.state.telescope_backend.correct_now()
+    except CorrectionRefused as exc:
+        return JSONResponse({"ok": False, "message": str(exc)})
+    if target is None:
+        return JSONResponse({"ok": False, "message": "no target yet -- slew somewhere first"})
+    ra_hours = target.ra_deg / 15.0
+    return JSONResponse(
+        {"ok": True, "message": f"correcting to RA {ra_hours:.3f}h Dec {target.dec_deg:.3f}°"}
+    )
+
+
 @router.post("/api/ui/actions/correction")
 async def action_set_correction(request: Request) -> JSONResponse:
     form = await request.form()
@@ -175,10 +201,14 @@ _PAGE = """<!doctype html>
   .state-OUT_OF_RANGE { background: #7a4a12; }
   .state-IDLE, .state-undefined { background: #444; }
   .state-SLEWING_MOUNT, .state-SETTLING, .state-AWAIT_SOLVE, .state-EVALUATE { background: #4a4a1a; }
+  .park-badge { font-weight: bold; padding: 0.1rem 0.6rem; border-radius: 4px; }
+  .park-badge.parked { background: #7a4a12; }
+  .park-badge.not-parked { background: #444; }
   .button-row { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.5rem; }
   .button-row:last-of-type { margin-bottom: 0; }
   button { background: #2a6b3f; border: none; color: white; padding: 0.5rem 1.1rem; border-radius: 4px; cursor: pointer; font-size: 0.95rem; }
   button.danger { background: #6b2a2a; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
   #message { color: #999; font-size: 0.85rem; margin-top: 0.6rem; min-height: 1.2em; }
 </style>
 </head>
@@ -197,7 +227,7 @@ _PAGE = """<!doctype html>
   <div class="row"><span>Location</span><span id="location">–</span></div>
   <div class="row"><span>Mount UTC date/time</span><span id="utc-date">–</span></div>
   <div class="row"><span>Sync points</span><span id="sync-point-count">–</span></div>
-  <div class="row"><span>Park state</span><span id="at-park">–</span></div>
+  <div class="row"><span>Park state</span><span id="at-park" class="park-badge">–</span></div>
   <div class="row">
     <span>Auto-correction (nudge to cedar)</span>
     <span><input type="checkbox" id="correction-toggle" onchange="setCorrection(this.checked)"></span>
@@ -207,6 +237,9 @@ _PAGE = """<!doctype html>
   <div class="button-row">
     <button onclick="post('/api/ui/actions/park')">Park</button>
     <button onclick="post('/api/ui/actions/unpark')">Unpark</button>
+  </div>
+  <div class="button-row">
+    <button id="correct-now-btn" onclick="post('/api/ui/actions/correct-now')">Correct now (nudge to target)</button>
     <button class="danger" onclick="post('/api/ui/actions/abort')">Abort</button>
   </div>
   <div class="button-row">
@@ -241,8 +274,11 @@ es.onmessage = (e) => {
   document.getElementById('sync-point-count').textContent = info && info.sync_point_count != null
     ? info.sync_point_count
     : (info ? 'not supported' : '–');
-  document.getElementById('at-park').textContent = info ? (info.at_park ? 'parked' : 'not parked') : '–';
+  const atParkEl = document.getElementById('at-park');
+  atParkEl.textContent = info ? (info.at_park ? 'PARKED' : 'not parked') : '–';
+  atParkEl.className = 'park-badge' + (info ? (info.at_park ? ' parked' : ' not-parked') : '');
   document.getElementById('correction-toggle').checked = !!s.correction_enabled;
+  document.getElementById('correct-now-btn').disabled = !!s.correction_enabled;
 };
 function formatUptime(totalSeconds) {
   const s = Math.floor(totalSeconds);

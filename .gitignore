@@ -15,3 +15,8 @@ dist/
 /GOALS.md
 /indi-refactor.md
 /TODO.md
+
+# Runtime-persisted UI state (state.py) -- written by the running service,
+# not a source file.
+/state.toml
+/state.toml.tmp

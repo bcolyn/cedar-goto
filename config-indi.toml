@@ -1,17 +1,22 @@
 # Real-hardware test config: cedar-goto's mount client talking straight to
-# indiserver (indi-refactor.md), bypassing indi_alpaca_server's stale
-# property snapshot bug. cedar mocked out (a MountEchoCedar echoes the real
-# mount's own position as ground truth -- no real cedar-server solving
-# needed to exercise the real mount plumbing). See indi-refactor.md.
+# indiserver, bypassing indi_alpaca_server's stale property snapshot bug.
+# cedar mocked out (a MountEchoCedar echoes the real mount's own position as
+# ground truth -- no real cedar-server solving needed to exercise the real
+# mount plumbing). Bench config: for on-sky use set [cedar].backend = "grpc"
+# and point [cedar].address at cedar-server.
 
 [mount]
 address = "mount.local:7624"       # your indiserver host:port
 backend = "indi"
 indi_device_name = "Skywatcher Alt-Az"
+# device_number is unused by the "indi" backend -- INDI addresses devices by name.
 
 [cedar]
 backend = "mock"
 
+# Well-known ASCOM defaults -- fine on a bench host, but they collide with
+# cedar-server's own Alpaca server (see the README's port-conflict section)
+# if cedar-goto runs on the same box.
 [server]
 bind = "0.0.0.0"
 alpaca_port = 11111
@@ -22,6 +27,7 @@ tolerance_arcmin = 1.0
 # max_correction_arcmin = 30.0
 max_iterations = 3
 settle_ms = 1500
+correction_enabled = true          # dashboard auto-correction toggle's starting state
 
 [solve]
 min_matches = 10

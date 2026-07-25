@@ -13,6 +13,7 @@ NOT_IMPLEMENTED = 0x400  # 1024
 INVALID_VALUE = 0x401  # 1025
 VALUE_NOT_SET = 0x402  # 1026
 NOT_CONNECTED = 0x407  # 1031
+PARKED = 0x408  # 1032
 INVALID_OPERATION = 0x40B  # 1035
 ACTION_NOT_IMPLEMENTED = 0x40C  # 1036
 DRIVER_ERROR_BASE = 0x500  # 1280
@@ -28,6 +29,11 @@ class AlpacaError(Exception):
 class NotConnectedError(AlpacaError):
     def __init__(self, message: str = "Device not connected") -> None:
         super().__init__(NOT_CONNECTED, message)
+
+
+class ParkedError(AlpacaError):
+    def __init__(self, message: str = "Telescope is parked") -> None:
+        super().__init__(PARKED, message)
 
 
 class ActionNotImplementedError(AlpacaError):

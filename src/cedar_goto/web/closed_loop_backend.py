@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from typing import Callable
 
 from cedar_goto.adapters.buzzer import Buzzer, NullBuzzer
 from cedar_goto.config import PositionSourceConfig
@@ -24,12 +25,14 @@ from cedar_goto.core.loop import (
 )
 from cedar_goto.core.ports import MountControl, SolveSource
 from cedar_goto.core.solve import SolveAcceptance, SolveResult
+from cedar_goto.web.alpaca_errors import ParkedError
 from cedar_goto.web.alpaca_spec import ALL_MEMBERS_BY_ACTION, Member
 from cedar_goto.web.backend import TelescopeBackend
 
 logger = logging.getLogger(__name__)
 
 _SLEW_MEMBERS = frozenset({"SlewToCoordinates", "SlewToCoordinatesAsync"})
+_AT_PARK_MEMBER = ALL_MEMBERS_BY_ACTION["atpark"]
 
 
 class SyncRefused(Exception):
@@ -38,6 +41,12 @@ class SyncRefused(Exception):
     being False (e.g. MountEchoCedar's loopback). Distinct from returning
     None, which covers the routine "cedar hasn't produced a good solve
     yet" case."""
+
+
+class CorrectionRefused(Exception):
+    """Raised by correct_now() when a closed loop is already running --
+    distinct from returning None ("nothing to correct to yet"), since the
+    fix is different: abort first, rather than slew somewhere first."""
 
 
 class ClosedLoopTelescopeBackend:
@@ -51,6 +60,7 @@ class ClosedLoopTelescopeBackend:
         position_config: PositionSourceConfig,
         buzzer: Buzzer | None = None,
         correction_enabled: bool = True,
+        on_correction_changed: Callable[[bool], None] | None = None,
     ) -> None:
         self._inner = inner
         self._mount = mount
@@ -64,6 +74,7 @@ class ClosedLoopTelescopeBackend:
         self._last_status: LoopStatus | None = None
         self._last_target: CelestialCoord | None = None
         self._correction_enabled = correction_enabled
+        self._on_correction_changed = on_correction_changed
 
     @property
     def last_status(self) -> LoopStatus | None:
@@ -76,8 +87,15 @@ class ClosedLoopTelescopeBackend:
         (Phase 1 behavior): no cedar feedback, no nudging, just the GoTo as
         commanded -- for when cedar's solves aren't trustworthy enough to
         act on automatically right now, without having to restart the
-        service to change config."""
+        service to change config.
+
+        on_correction_changed (state.py, wired in __main__.py) persists this
+        across restarts -- deliberately a callback rather than this class
+        doing file I/O itself, so the closed-loop logic stays independent of
+        where/how (or whether) the host process persists it."""
         self._correction_enabled = enabled
+        if self._on_correction_changed is not None:
+            self._on_correction_changed(enabled)
 
     async def get(self, member: Member):
         if member.name == "Slewing":
@@ -136,6 +154,12 @@ class ClosedLoopTelescopeBackend:
         return self._task is not None and not self._task.done()
 
     async def _start_slew(self, member: Member, params: dict, wait: bool):
+        # Fail fast before touching loop/cedar state at all -- AtPark is a
+        # cheap cached read (see IndiTelescopeBackend._slew), so this costs
+        # nothing and gives the client the ParkedException it expects instead
+        # of a slew attempt that the mount silently ignores or hangs on.
+        if await self._inner.get(_AT_PARK_MEMBER):
+            raise ParkedError("Cannot slew while the mount is parked -- unpark first")
         target = CelestialCoord(
             ra_deg=params["RightAscension"] * 15.0, dec_deg=params["Declination"], epoch=J2000
         )
@@ -165,11 +189,14 @@ class ClosedLoopTelescopeBackend:
             # but applies no cedar-driven correction at all.
             return await self._inner.put(member, params)
 
-        self._current_loop = ClosedLoopSlew(self._mount, self._cedar, self._loop_config, self._acceptance)
-        self._task = asyncio.create_task(self._run_loop(self._current_loop, target))
+        self._launch_loop(target)
         if wait:
             await self._task
         return None
+
+    def _launch_loop(self, target: CelestialCoord) -> None:
+        self._current_loop = ClosedLoopSlew(self._mount, self._cedar, self._loop_config, self._acceptance)
+        self._task = asyncio.create_task(self._run_loop(self._current_loop, target))
 
     async def _run_loop(self, loop: ClosedLoopSlew, target: CelestialCoord) -> None:
         iteration = self._last_status.iteration if self._last_status else 0
@@ -265,6 +292,34 @@ class ClosedLoopTelescopeBackend:
         target = self._last_target
         await self._mount.sync_to(target)
         await self._cedar.notify_slew_stopped()
+        return target
+
+    async def correct_now(self) -> CelestialCoord | None:
+        """Web UI "correct now" action: run the closed loop against the last
+        commanded target on demand, without waiting for a fresh slew from the
+        client. This is the escape hatch for auto-correction being off (or
+        the slew having already finished) and the user then deciding they do
+        want cedar to nudge after all -- otherwise the only way to get a
+        correction is to re-issue the GoTo from the planetarium app.
+
+        Deliberately ignores _correction_enabled: that toggle governs what
+        happens automatically on a slew, and pressing this button *is* the
+        user asking for correction explicitly.
+
+        Returns the target being corrected to (the loop then runs in the
+        background, reported via status_snapshot like any other slew), or
+        None if no slew has been commanded yet. Raises CorrectionRefused if
+        a loop is already running."""
+        if self._loop_active():
+            raise CorrectionRefused("a closed-loop slew is already running -- abort it first")
+        if self._last_target is None:
+            return None
+        target = self._last_target
+        # sync_to_target()/AbortSlew/Park may already have told cedar the
+        # slew is over, so re-arm its push-to guidance for this target --
+        # notify_slew_started is idempotent from cedar's point of view.
+        await self._cedar.notify_slew_started(target)
+        self._launch_loop(target)
         return target
 
     def status_snapshot(self) -> dict:

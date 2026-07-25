@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+from pathlib import Path
 
 import uvicorn
 
@@ -16,6 +17,7 @@ from cedar_goto.adapters.buzzer import build_buzzer
 from cedar_goto.config import Config
 from cedar_goto.core.loop import LoopConfigCore
 from cedar_goto.core.solve import SolveAcceptance
+from cedar_goto.state import PersistedState, load_state, save_state
 from cedar_goto.web.app import create_app
 from cedar_goto.web.backend import TelescopeBackend
 from cedar_goto.web.closed_loop_backend import ClosedLoopTelescopeBackend
@@ -42,7 +44,7 @@ def _solve_acceptance(config: Config) -> SolveAcceptance:
     )
 
 
-def _build_backend(config: Config) -> TelescopeBackend:
+def _build_backend(config: Config, state_path: Path) -> TelescopeBackend:
     # [mount].backend and [cedar].backend are independent -- e.g. a real
     # mount against a mock solve source when cedar-server can't solve
     # (daylight, no stars).
@@ -105,6 +107,11 @@ def _build_backend(config: Config) -> TelescopeBackend:
         logger.info("Using real cedar gRPC solve source at %s", config.cedar.address)
         cedar = CedarGrpcClient(config.cedar.address)
 
+    persisted = load_state(state_path, default_correction_enabled=config.loop.correction_enabled)
+
+    def _persist_correction_enabled(enabled: bool) -> None:
+        save_state(state_path, PersistedState(correction_enabled=enabled))
+
     return ClosedLoopTelescopeBackend(
         inner,
         mount,
@@ -113,12 +120,13 @@ def _build_backend(config: Config) -> TelescopeBackend:
         _solve_acceptance(config),
         config.position,
         buzzer=build_buzzer(config.buzzer),
-        correction_enabled=config.loop.correction_enabled,
+        correction_enabled=persisted.correction_enabled,
+        on_correction_changed=_persist_correction_enabled,
     )
 
 
-async def _run(config: Config) -> None:
-    backend = _build_backend(config)
+async def _run(config: Config, state_path: Path) -> None:
+    backend = _build_backend(config, state_path)
     app = create_app(backend)
 
     server = uvicorn.Server(
@@ -146,7 +154,11 @@ def main() -> None:
     args = parser.parse_args()
 
     config = Config.load(args.config)
-    asyncio.run(_run(config))
+    # Sibling of config.toml, not a rewrite of it (state.py) -- keeps
+    # install.sh's "config.toml is never touched by an upgrade" promise
+    # (README.md "Deployment") intact for this file too.
+    state_path = Path(args.config).with_name("state.toml")
+    asyncio.run(_run(config, state_path))
 
 
 if __name__ == "__main__":

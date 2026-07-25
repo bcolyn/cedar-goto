@@ -15,6 +15,7 @@ from cedar_goto.config import PositionSourceConfig
 from cedar_goto.core.coords import CelestialCoord
 from cedar_goto.core.loop import LoopConfigCore
 from cedar_goto.core.solve import SolveAcceptance
+from cedar_goto.web.alpaca_errors import PARKED
 from cedar_goto.web.app import create_app
 from cedar_goto.web.closed_loop_backend import ClosedLoopTelescopeBackend
 
@@ -186,6 +187,43 @@ async def test_park_aborts_a_running_slew_before_parking():
         assert (await client.get("/api/v1/telescope/0/slewing")).json()["Value"] is False
 
 
+async def test_slew_while_parked_is_refused_without_starting_the_loop():
+    class AlwaysParkedInner:
+        """MockTelescopeBackend hardcodes AtPark=False -- this wraps it to
+        report parked, to test the pre-slew guard without needing the real
+        INDI/ASCOM plumbing."""
+
+        def __init__(self, mock_inner: MockTelescopeBackend) -> None:
+            self._mock = mock_inner
+
+        async def get(self, member):
+            if member.name == "AtPark":
+                return True
+            return await self._mock.get(member)
+
+        async def put(self, member, params):
+            return await self._mock.put(member, params)
+
+        async def query(self, member, params):
+            return await self._mock.query(member, params)
+
+    world = World(error_model=HarmonicErrorModel())
+    inner = AlwaysParkedInner(MockTelescopeBackend(world))
+    mount, cedar = MockMount(world), MockCedar(world)
+    config = LoopConfigCore(tolerance_arcmin=1.0, max_iterations=10, settle_s=0.01)
+    backend = ClosedLoopTelescopeBackend(
+        inner, mount, cedar, config, SolveAcceptance(), PositionSourceConfig(source="mount")
+    )
+    async with await make_client(backend) as client:
+        await client.put("/api/v1/telescope/0/connected", data={"Connected": "true"})
+        resp = await client.put(
+            "/api/v1/telescope/0/slewtocoordinatesasync",
+            data={"RightAscension": "8.0", "Declination": "30.0"},
+        )
+        assert resp.json()["ErrorNumber"] == PARKED
+        assert (await client.get("/api/v1/telescope/0/slewing")).json()["Value"] is False
+
+
 async def test_new_slew_supersedes_a_running_one():
     world = World(error_model=HarmonicErrorModel())
     backend = make_backend(world, max_iterations=10, settle_s=0.2)
@@ -236,6 +274,21 @@ async def test_disabling_correction_does_not_abort_an_in_progress_loop():
 
         assert backend.last_status is not None
         assert backend.last_status.state.name == "CONVERGED"
+
+
+async def test_set_correction_enabled_invokes_the_persistence_callback():
+    world = World(error_model=HarmonicErrorModel())
+    inner = MockTelescopeBackend(world)
+    mount, cedar = MockMount(world), MockCedar(world)
+    config = LoopConfigCore(tolerance_arcmin=1.0, max_iterations=3, settle_s=0.01)
+    calls: list[bool] = []
+    backend = ClosedLoopTelescopeBackend(
+        inner, mount, cedar, config, SolveAcceptance(), PositionSourceConfig(source="mount"),
+        on_correction_changed=calls.append,
+    )
+    backend.set_correction_enabled(False)
+    backend.set_correction_enabled(True)
+    assert calls == [False, True]
 
 
 async def test_correction_disabled_is_a_bare_proxy_slew():

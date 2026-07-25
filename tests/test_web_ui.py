@@ -138,6 +138,67 @@ async def test_correction_toggle_reflected_in_status_and_disables_the_loop():
         assert status["last_target"]["ra_deg"] == pytest.approx(60.0)
 
 
+async def test_correct_now_reports_no_target_yet():
+    async with make_client(World()) as client:
+        resp = await client.post("/api/ui/actions/correct-now")
+        body = resp.json()
+        assert body["ok"] is False
+        assert "no target" in body["message"]
+
+
+async def test_correct_now_runs_the_loop_even_with_auto_correction_off():
+    """The on-demand button is the escape hatch for "auto-correction is off
+    and I changed my mind" -- a bare proxy slew leaves the mount at its raw
+    pointing error, and pressing this must still close the loop on it."""
+    world = World(error_model=HarmonicErrorModel())
+    async with make_client(world) as client:
+        await client.post("/api/ui/actions/correction", data={"enabled": "false"})
+        await client.put("/api/v1/telescope/0/connected", data={"Connected": "true"})
+        await client.put(
+            "/api/v1/telescope/0/slewtocoordinatesasync",
+            data={"RightAscension": "4.0", "Declination": "15.0"},
+        )
+        for _ in range(200):
+            await asyncio.sleep(0.02)
+            if (await client.get("/api/v1/telescope/0/slewing")).json()["Value"] is False:
+                break
+        else:
+            pytest.fail("bare slew never settled")
+        assert (await client.get("/api/ui/status")).json()["state"] == "IDLE"
+
+        resp = await client.post("/api/ui/actions/correct-now")
+        assert resp.json()["ok"] is True
+
+        for _ in range(200):
+            await asyncio.sleep(0.02)
+            status = (await client.get("/api/ui/status")).json()
+            if status["state"] in ("CONVERGED", "FAILED"):
+                break
+        else:
+            pytest.fail("on-demand correction never settled")
+
+        assert status["state"] == "CONVERGED"
+        # Still off -- the button is a one-shot, not a way to flip the toggle.
+        assert status["correction_enabled"] is False
+
+
+async def test_correct_now_refuses_while_a_loop_is_running():
+    world = World(error_model=HarmonicErrorModel())
+    async with make_client(world, max_iterations=10) as client:
+        await client.put("/api/v1/telescope/0/connected", data={"Connected": "true"})
+        await client.put(
+            "/api/v1/telescope/0/slewtocoordinatesasync",
+            data={"RightAscension": "4.0", "Declination": "15.0"},
+        )
+        assert (await client.get("/api/v1/telescope/0/slewing")).json()["Value"] is True
+
+        body = (await client.post("/api/ui/actions/correct-now")).json()
+        assert body["ok"] is False
+        assert "already running" in body["message"]
+
+        await client.post("/api/ui/actions/abort")
+
+
 async def test_status_includes_mount_info_with_sync_points_unsupported_by_mock():
     world = World()
     async with make_client(world) as client:

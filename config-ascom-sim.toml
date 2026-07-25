@@ -2,7 +2,7 @@
 # pointed at the official ASCOM Remote Server's simulator, with cedar
 # mocked out (a MountEchoCedar echoes the real mount's own position as
 # ground truth -- no real cedar-server solving needed to exercise the real
-# mount plumbing). See DESIGN.md §3a/§11.
+# mount plumbing).
 # device_number: 0 = "Telescope Simulator for .NET", 1 = "ASCOM OmniSim
 # Telescope", 2 = "Simulator".
 
@@ -14,6 +14,10 @@ backend = "alpyca"
 [cedar]
 backend = "mock"
 
+# Well-known ASCOM defaults -- fine on a bench host, but they collide with
+# cedar-server's own Alpaca server (see the README's port-conflict section)
+# if cedar-goto runs on the same box. The remote simulator's own :11111
+# above is a different host, so it doesn't conflict.
 [server]
 bind = "0.0.0.0"
 alpaca_port = 11111
@@ -24,6 +28,7 @@ tolerance_arcmin = 1.0
 # max_correction_arcmin = 30.0
 max_iterations = 3
 settle_ms = 1500
+correction_enabled = true          # dashboard auto-correction toggle's starting state
 
 [solve]
 min_matches = 10

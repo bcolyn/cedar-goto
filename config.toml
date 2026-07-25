@@ -1,15 +1,26 @@
-# cedar-goto default configuration. See DESIGN.md §6 for field docs.
+# cedar-goto default configuration. Every key below is also the code
+# default (src/cedar_goto/config.py) except where noted; see the README for
+# what they do.
 
 [mount]
 address = "127.0.0.1:11111"
 device_number = 0
-backend = "mock"              # "alpyca" (real mount) | "mock" (simulated-sky harness, DESIGN.md §9a)
+backend = "mock"              # "alpyca" (real mount) | "indi" (straight to indiserver) | "mock" (simulated-sky harness)
+# indi_device_name = "Skywatcher Alt-Az"  # "indi" backend only -- INDI addresses devices
+                                          # by name, so device_number is ignored there, and
+                                          # `address` is indiserver's own host:port (:7624).
 
 # cedar-server serves gRPC on the same port as its web UI (tonic's
 # GrpcWebLayer combines them) -- default 80, not a dedicated gRPC port.
 [cedar]
 address = "127.0.0.1:80"
+backend = "mock"              # "grpc" (real cedar-server) | "mock" (simulated solves).
+                              # Independent of [mount].backend -- switch to "grpc" once
+                              # cedar-server is reachable at the address above.
 
+# Defaults are the ASCOM well-known ports, which cedar-server's own Alpaca
+# server also uses -- see "Port conflict with cedar-server's own Alpaca
+# server" in the README if cedar-goto is running on the same host.
 [server]
 bind = "0.0.0.0"
 alpaca_port = 11111
@@ -28,6 +39,8 @@ tolerance_arcmin = 1.0        # "min_move": stop nudging once measured error is 
 # max_correction_arcmin = 30.0  # "max_move": refuse to auto-nudge above this (uncomment once tuned on-sky)
 max_iterations = 3
 settle_ms = 1500
+correction_enabled = true     # starting state of the dashboard's auto-correction toggle;
+                              # off = SlewToCoordinates is a bare proxy (no cedar nudging)
 
 [solve]
 min_matches = 10

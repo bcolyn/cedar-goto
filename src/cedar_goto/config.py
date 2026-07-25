@@ -64,7 +64,12 @@ class LoopConfig(BaseModel):
     """Starting state of the web UI's auto-correction toggle -- can be
     flipped at runtime from the dashboard without restarting the service.
     With it off, SlewToCoordinates(Async) is a bare proxy to the mount (no
-    cedar feedback/nudging)."""
+    cedar feedback/nudging). Only takes effect until the toggle is first
+    flipped from the dashboard -- after that, state.toml (state.py, a
+    sibling of this config file) remembers the last value and takes over on
+    every subsequent restart, since the whole point of persisting it is to
+    survive a restart with whatever the user last chose. Delete state.toml
+    to fall back to this setting again."""
 
 
 class SolveConfig(BaseModel):

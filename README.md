@@ -3,9 +3,11 @@
 cedar-goto connects [cedar-server](https://github.com/smroid/cedar-server)
 (a plate-solving electronic finder) to a GoTo telescope mount. It shows up
 to your planetarium app as an ordinary ASCOM Alpaca telescope, but under the
-hood, every slew is corrected in a closed loop using cedar's plate solves --
-so "Go To" actually lands on target instead of wherever the mount's own
-alignment model thinks it should.
+hood it can close the loop on a slew with cedar's plate solves -- nudging
+the mount onto target where its own pointing model falls short, and giving
+you the manual sync controls to build a good pointing model in the first
+place. See [Field workflow](#field-workflow-on-sky) for how the two fit
+together on-sky.
 
 It's been tested against real Alpaca mount hardware, a real INDI-driven
 mount, real cedar-server, and real SkySafari 8. There's also a
@@ -13,15 +15,65 @@ simulated-sky mock mode, so you can try the whole thing out with no
 hardware at all.
 
 Highlights:
-- Closed-loop slewing that corrects for mount pointing error using cedar's
-  plate solves, with clean recovery (not a crash or a stuck state) if a
-  solve gets rejected or the mount errors out.
+- Closed-loop slewing that nudges out mount pointing error using cedar's
+  plate solves -- runtime-toggleable, and it never syncs the mount on its
+  own -- with clean recovery (not a crash or a stuck state) if a solve gets
+  rejected or the mount errors out.
 - Reported position can come from cedar's plate solve instead of the
   mount's own idea of where it's pointed, falling back to the mount
   automatically if cedar isn't available.
 - A small web UI for live status plus manual sync/abort/park controls.
 - An optional GPIO buzzer for audible feedback on a headless Pi.
 - systemd packaging for easy Raspberry Pi deployment.
+
+## Field workflow (on-sky)
+
+cedar-goto doesn't replace the mount's own alignment model -- it helps you
+build a good one and corrects what's left over. Two alignments decide how
+well the whole thing points, and both want to be done on a real star:
+cedar's boresight alignment to the main scope, and the mount's own
+alignment/sync points.
+
+Do cedar's boresight alignment on a star, not in daylight mode. With stars
+in view, cedar detects the star you pick and centroids it to sub-pixel
+accuracy; in daylight mode all it has is the image coordinate your finger
+landed on (`designate_boresight` in `proto/cedar.proto`), which is as
+accurate as your tap and no more. A daytime alignment is fine for finding a
+first star in the main scope -- redo it on that star before trusting
+anything downstream of it.
+
+The routine that works (C9.25, long focal length, 2026-07 field testing):
+
+1. Power up the mount and cedar-server. Leave **auto-correction** on.
+2. GoTo a bright star through cedar-goto, so cedar-server hears about the
+   slew and can offer its own [push-to guidance](#web-ui--buzzer). Find
+   the star in the main scope -- red-dot finder, or cedar's push-to arrow
+   if cedar still carries its daytime alignment -- and center it with a
+   crosshair eyepiece.
+3. With the star centered in the main scope, (re)align cedar's boresight on
+   it, in star mode rather than daylight mode.
+4. Press **Sync to target** to sync the mount to that star's commanded
+   coordinate. That's alignment point one.
+5. GoTo a second star. If the pointing is off, let the closed loop nudge it
+   in -- or press **Correct now (nudge to target)** to run it on demand, or
+   nudge by hand following cedar's push-to arrow. Center it in the main
+   scope, then **Sync to target** again.
+6. Repeat once more for a third star, then stop. Three carefully centered
+   points is the sweet spot: accuracy comes from how precisely each point
+   was centered, not from how many there are, and a sloppy point degrades
+   the model rather than averaging out (**Clear sync points** to start
+   over).
+7. Observe using the mount's own GoTo from here on. With a good three-point
+   model it lands accurately on its own, so there's no need to route
+   everything through the closed loop or to keep syncing -- pick the
+   alignment back up (steps 5-6) only when working far from the alignment
+   stars.
+
+Sync through cedar-goto's **Sync to target**. Syncing from SkySafari over a
+direct INDI connection to the mount corrupts the alignment model instead:
+confirmed 3/3 times live (2026-07-24, incl. after a SkySafari update) that
+its `ON_COORD_SET=SYNC` sends Declination in radians rather than degrees,
+appending a permanent bad point that warps GoTos computed near it.
 
 ## Setup
 
@@ -142,10 +194,18 @@ state/iteration/error/last-solve via SSE, plus mount info -- location,
 mount UTC date/time, sync-point count, park state). No build step, no
 external assets/CDN, so it works standalone on a Pi with no internet.
 
-Actions: **Sync now (cedar solve)** (syncs the mount straight to cedar's
-current solve, bypassing the closed loop), **Sync to target**, **Abort**,
-**Park**/**Unpark**, and **Clear sync points**. Park aborts any in-flight
-closed-loop slew first.
+Actions: **Correct now (nudge to target)** (runs the closed loop against the
+last commanded target on demand), **Sync now (cedar solve)** (syncs the mount
+straight to cedar's current solve, bypassing the closed loop), **Sync to
+target**, **Abort**, **Park**/**Unpark**, and **Clear sync points**. Park
+aborts any in-flight closed-loop slew first.
+
+**Sync to target** is the one to reach for while aligning (see
+[Field workflow](#field-workflow-on-sky)): it syncs to the coordinate you
+asked for, once *you* have confirmed the main scope is on it. **Sync now
+(cedar solve)** is only ever as good as cedar's boresight alignment to the
+main scope -- it's for when you trust that alignment and can't center the
+target by hand.
 
 The closed loop itself never syncs the mount on its own anymore: a plate
 solve landing within `tolerance_arcmin` only proves cedar thinks the mount
@@ -185,7 +245,11 @@ entirely at runtime (no restart needed): with it off, SlewToCoordinates(Async)
 is a bare proxy straight to the mount, same as before the closed loop
 existed -- for when cedar's solves aren't trustworthy enough to act on right
 now. cedar-goto still remembers the commanded target either way, so **Sync
-to target** keeps working after a bare slew too.
+to target** keeps working after a bare slew too -- as does **Correct now
+(nudge to target)**, which runs the loop once against that remembered target
+regardless of the toggle, for when you turned correction off (or the slew has
+already finished) and then changed your mind. It leaves the toggle alone, and
+refuses while a closed-loop slew is already running.
 
 Sync-point count and Clear are INDI-specific (no ASCOM Alpaca equivalent
 exists); they show as "not supported" against the `alpyca`/`mock` backends.
@@ -207,9 +271,13 @@ journalctl -u cedar-goto -f
 ```
 
 Re-running `install.sh` upgrades the code + venv in place without touching
-an existing `config.toml`. See `packaging/cedar-goto.service` for the unit
-file (adds the service user to the `gpio` group for the buzzer; harmless
-if unused).
+an existing `config.toml` -- or `state.toml`, a second, install.sh-managed
+file next to it that the running service writes to itself (currently just
+the web UI's auto-correction toggle, so it survives a restart with
+whatever you last set it to; see `[loop].correction_enabled` in
+`config.toml` for the fallback before it's ever been toggled). See
+`packaging/cedar-goto.service` for the unit file (adds the service user to
+the `gpio` group for the buzzer; harmless if unused).
 
 `install.sh` also installs `pyindi-client` (needed for `[mount].backend =
 "indi"`) with `--no-deps`, regardless of which backend you end up using --

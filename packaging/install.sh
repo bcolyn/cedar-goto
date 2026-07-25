@@ -31,6 +31,7 @@ mkdir -p "$INSTALL_DIR"
 rsync -a --delete \
     --exclude='.venv' --exclude='.git' --exclude='__pycache__' --exclude='*.egg-info' \
     --exclude='config.toml' --exclude='config-ascom-sim.toml' --exclude='config-indi.toml' \
+    --exclude='state.toml' --exclude='state.toml.tmp' \
     "$REPO_DIR"/ "$INSTALL_DIR"/
 
 python3 -m venv "$INSTALL_DIR/.venv"

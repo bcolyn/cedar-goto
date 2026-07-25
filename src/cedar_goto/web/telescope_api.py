@@ -30,16 +30,41 @@ router = APIRouter()
 
 _CONNECTED_MEMBER = ALL_MEMBERS_BY_ACTION["connected"]
 
+# Logged at the dispatch choke point rather than deep in each backend, so
+# every slew/sync command and its outcome shows up in one place regardless
+# of which backend/path handled it -- closed loop, bare proxy, or a plain
+# refusal (e.g. ParkedError) that would otherwise vanish silently into the
+# Alpaca error envelope (confirmed live: had to curl the endpoint directly
+# to see a parked-mount refusal, journalctl showed nothing).
+_SLEW_SYNC_ACTIONS = frozenset(
+    {
+        "slewtocoordinates", "slewtocoordinatesasync",
+        "slewtotarget", "slewtotargetasync",
+        "slewtoaltaz", "slewtoaltazasync",
+        "synctocoordinates", "synctotarget", "synctoaltaz",
+    }
+)
+
+
+def _loggable_params(params: dict) -> dict:
+    return {k: v for k, v in params.items() if k not in ("clientid", "clienttransactionid")}
+
 
 @router.api_route("/api/v1/telescope/{device_number}/{action}", methods=["GET", "PUT"])
 async def telescope_endpoint(device_number: int, action: str, request: Request):
     backend: TelescopeBackend = request.app.state.telescope_backend
     params = await collect_params(request)
     txn_id = client_transaction_id(params)
+    action = action.lower()
+    log_this = request.method == "PUT" and action in _SLEW_SYNC_ACTIONS
     try:
-        value = await _dispatch(backend, action.lower(), request.method, params)
+        value = await _dispatch(backend, action, request.method, params)
+        if log_this:
+            logger.info("%s accepted: %s", action, _loggable_params(params))
         return alpaca_response(txn_id, value=value)
     except AlpacaError as exc:
+        if log_this:
+            logger.warning("%s refused: %s (%s)", action, exc.message, _loggable_params(params))
         return alpaca_response(txn_id, error=exc)
     except Exception as exc:
         # A backend surprise here (real-hardware network timeout, an

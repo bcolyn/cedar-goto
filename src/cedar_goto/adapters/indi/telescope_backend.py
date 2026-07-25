@@ -16,7 +16,7 @@ import asyncio
 from datetime import datetime, timezone
 
 from cedar_goto.adapters.indi.client import IndiConnection
-from cedar_goto.web.alpaca_errors import AlpacaError, NOT_IMPLEMENTED, VALUE_NOT_SET
+from cedar_goto.web.alpaca_errors import AlpacaError, NOT_IMPLEMENTED, ParkedError, VALUE_NOT_SET
 from cedar_goto.web.alpaca_spec import Member
 
 _EQUATORIAL_EOD_COORD = "EQUATORIAL_EOD_COORD"
@@ -243,6 +243,13 @@ class IndiTelescopeBackend:
             raise AlpacaError(VALUE_NOT_SET, "Target RA/Dec has not been set")
 
     async def _slew(self, ra_hours: float, dec_deg: float) -> None:
+        # ITelescopeV3 requires SlewTo*/SyncTo* to throw ParkedException
+        # immediately when AtPark is true, rather than attempting a move --
+        # AtPark itself is a cheap cached read (no INDI round-trip once the
+        # property's arrived, which it reliably has by the time a GoTo comes
+        # in since the web UI dashboard already polls it continuously).
+        if await self._conn.get_switch(_TELESCOPE_PARK, "PARK"):
+            raise ParkedError("Cannot slew while the mount is parked -- unpark first")
         await self._conn.set_switch(_ON_COORD_SET, "TRACK")
         await self._conn.wait_for_switch_confirmed(_ON_COORD_SET, "TRACK")
         await self._conn.set_numbers(_EQUATORIAL_EOD_COORD, {"RA": ra_hours, "DEC": dec_deg})

@@ -22,7 +22,12 @@ Two consequences here:
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
+
+logger = logging.getLogger(__name__)
+
+_TELESCOPE_PARK = "TELESCOPE_PARK"
 
 
 class IndiConnectionError(Exception):
@@ -41,6 +46,7 @@ class IndiConnection:
         self._ready_events: dict[str, asyncio.Event] = {}
         self._connect_lock = asyncio.Lock()
         self._connected = False
+        self._last_park_state: bool | None = None
 
         outer = self
 
@@ -55,7 +61,7 @@ class IndiConnection:
                 outer._on_arrival(p.getName(), p.getDeviceName())
 
             def updateProperty(self, p):
-                pass
+                outer._on_update(p.getDeviceName(), p.getName())
 
             def removeProperty(self, p):
                 pass
@@ -78,6 +84,23 @@ class IndiConnection:
         event = self._event_for(key)
         if self._loop is not None:
             self._loop.call_soon_threadsafe(event.set)
+
+    def _on_update(self, device_name: str, prop_name: str) -> None:
+        # Runs on PyIndi's own background thread (module docstring) --
+        # logging is internally thread-safe, so no call_soon_threadsafe
+        # needed here, unlike _on_arrival's asyncio.Event.
+        if device_name != self._device_name or prop_name != _TELESCOPE_PARK:
+            return
+        widget = self._device().getSwitch(_TELESCOPE_PARK)
+        if widget is None:
+            return
+        widget = widget.findWidgetByName("PARK")
+        if widget is None:
+            return
+        parked = widget.getState() == self._PyIndi.ISS_ON
+        if parked != self._last_park_state:
+            logger.info("mount park state changed: %s", "parked" if parked else "unparked")
+            self._last_park_state = parked
 
     def _event_for(self, key: str) -> asyncio.Event:
         with self._lock:

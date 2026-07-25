@@ -11,7 +11,7 @@ import pytest
 from cedar_goto.adapters.indi.mount_client import IndiMountClient, _current_jyear
 from cedar_goto.adapters.indi.telescope_backend import IndiTelescopeBackend
 from cedar_goto.core.coords import CelestialCoord
-from cedar_goto.web.alpaca_errors import AlpacaError
+from cedar_goto.web.alpaca_errors import AlpacaError, ParkedError
 from cedar_goto.web.alpaca_spec import ALL_MEMBERS_BY_ACTION
 
 _EQUATORIAL_EOD_COORD = "EQUATORIAL_EOD_COORD"
@@ -224,6 +224,16 @@ async def test_sync_to_target_requires_target_then_syncs(backend, fake):
     await backend.put(ALL_MEMBERS_BY_ACTION["synctotarget"], {})
     assert fake.sent_switches[-1] == (_ON_COORD_SET, "SYNC")
     assert fake.sent_numbers[-1] == (_EQUATORIAL_EOD_COORD, {"RA": 6.0, "DEC": 25.0})
+
+
+async def test_slew_while_parked_raises_parked_error_without_sending_anything(backend, fake):
+    fake.switches["TELESCOPE_PARK"] = {"PARK": True, "UNPARK": False}
+    with pytest.raises(ParkedError):
+        await backend.put(
+            ALL_MEMBERS_BY_ACTION["slewtocoordinatesasync"], {"RightAscension": 4.0, "Declination": 15.0}
+        )
+    assert fake.sent_switches == []
+    assert fake.sent_numbers == []
 
 
 async def test_slew_to_target_async_sets_track(backend, fake):
