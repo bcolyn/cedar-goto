@@ -16,6 +16,19 @@ from cedar_goto.core.ports import MountControl
 
 _EQUATORIAL_EOD_COORD = "EQUATORIAL_EOD_COORD"
 _ON_COORD_SET = "ON_COORD_SET"
+_TELESCOPE_SLEW_RATE = "TELESCOPE_SLEW_RATE"
+_CORRECTION_SLEW_RATE = "2x"
+"""TELESCOPE_SLEW_RATE elements are 1x..9x plus SLEW_MAX, labeled
+0.5x/1x/2x/4x/8x/16x/32x/64x/128x sidereal respectively (confirmed live
+2026-07-25) -- element '2x' is labeled '1.000000x', i.e. 1x sidereal.
+The mount's original default/last-used rate (element '3x', 2x sidereal)
+overshoots the target on the closed loop's GoTo/re-slew commands; '1x'
+element (0.5x sidereal) was tried first but was too slow in practice (the
+closed loop's mount_slewing_timeout_s got nowhere near covering even a
+modest slew at that rate). This is used only for the duration of a
+closed-loop correction (see
+IndiMountClient.prepare_for_correction/restore_after_correction), not a
+permanent change."""
 
 
 def _current_jyear() -> float:
@@ -27,6 +40,23 @@ def _current_jyear() -> float:
 class IndiMountClient(MountControl):
     def __init__(self, conn: IndiConnection) -> None:
         self._conn = conn
+        self._saved_slew_rate: str | None = None
+
+    async def prepare_for_correction(self) -> None:
+        """Not part of the MountControl Protocol -- ClosedLoopSlew.run()
+        getattr's this optional capability and calls it once before driving
+        any mount motion, to reduce mechanical overshoot from the closed
+        loop's GoTo/re-slew commands. Paired with restore_after_correction()
+        in a try/finally, so the original rate always comes back regardless
+        of how the loop ends (converged/failed/aborted)."""
+        self._saved_slew_rate = await self._conn.get_switch_selection(_TELESCOPE_SLEW_RATE)
+        if self._saved_slew_rate is not None:
+            await self._conn.set_switch(_TELESCOPE_SLEW_RATE, _CORRECTION_SLEW_RATE)
+
+    async def restore_after_correction(self) -> None:
+        if self._saved_slew_rate is not None:
+            await self._conn.set_switch(_TELESCOPE_SLEW_RATE, self._saved_slew_rate)
+            self._saved_slew_rate = None
 
     async def slew_to(self, target: CelestialCoord) -> None:
         # ON_COORD_SET=TRACK, not SLEW -- goto-and-track semantics, matching

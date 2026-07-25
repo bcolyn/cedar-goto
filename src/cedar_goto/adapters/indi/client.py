@@ -155,6 +155,16 @@ class IndiConnection:
             raise IndiConnectionError(f"{prop}.{elem} has no such element")
         return widget.getState() == self._PyIndi.ISS_ON
 
+    async def get_switch_selection(self, prop: str) -> str | None:
+        """Name of the currently-On element of a one-of-many switch vector
+        (e.g. TELESCOPE_SLEW_RATE), or None if none is On."""
+        await self.wait_for_property(prop)
+        vec = self._device().getSwitch(prop)
+        for i in range(len(vec)):
+            if vec[i].getState() == self._PyIndi.ISS_ON:
+                return vec[i].getName()
+        return None
+
     async def is_property_busy(self, prop: str) -> bool:
         await self.wait_for_property(prop)
         return self._device().getPropertyState(prop) == self._PyIndi.IPS_BUSY

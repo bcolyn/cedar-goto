@@ -95,68 +95,82 @@ class ClosedLoopSlew:
         commanded = true_target
         iteration = 0
 
-        while True:
-            self._check_abort()
-            yield LoopStatus(LoopState.SLEWING_MOUNT, iteration, true_target, commanded)
-            await self._mount.slew_to(commanded)
-            await self._wait_for_settle()
+        # Optional MountControl capability (found live 2026-07-25: this
+        # mount's default GoTo speed overshoots the target, which the
+        # closed loop then has to correct out over extra iterations).
+        # getattr'd rather than added to the MountControl Protocol proper
+        # since it's mount-specific and most adapters (Alpaca, mocks) have
+        # no equivalent -- a no-op there is correct, not a missing feature.
+        prepare_for_correction = getattr(self._mount, "prepare_for_correction", None)
+        restore_after_correction = getattr(self._mount, "restore_after_correction", None)
+        if prepare_for_correction is not None:
+            await prepare_for_correction()
+        try:
+            while True:
+                self._check_abort()
+                yield LoopStatus(LoopState.SLEWING_MOUNT, iteration, true_target, commanded)
+                await self._mount.slew_to(commanded)
+                await self._wait_for_settle()
 
-            self._check_abort()
-            yield LoopStatus(LoopState.SETTLING, iteration, true_target, commanded)
-            await asyncio.sleep(self._config.settle_s)
+                self._check_abort()
+                yield LoopStatus(LoopState.SETTLING, iteration, true_target, commanded)
+                await asyncio.sleep(self._config.settle_s)
 
-            self._check_abort()
-            yield LoopStatus(LoopState.AWAIT_SOLVE, iteration, true_target, commanded)
-            solve = await self._await_fresh_accepted_solve()
-            if solve is None:
+                self._check_abort()
+                yield LoopStatus(LoopState.AWAIT_SOLVE, iteration, true_target, commanded)
+                solve = await self._await_fresh_accepted_solve()
+                if solve is None:
+                    yield LoopStatus(
+                        LoopState.FAILED, iteration, true_target, commanded,
+                        message="no acceptable solve within timeout",
+                    )
+                    return
+
+                actual = solve.sky_coord
+                error_deg = angular_separation_deg(true_target, actual)
+                error_arcmin = error_deg * 60.0
                 yield LoopStatus(
-                    LoopState.FAILED, iteration, true_target, commanded,
-                    message="no acceptable solve within timeout",
+                    LoopState.EVALUATE, iteration, true_target, commanded, solve, error_arcmin,
                 )
-                return
 
-            actual = solve.sky_coord
-            error_deg = angular_separation_deg(true_target, actual)
-            error_arcmin = error_deg * 60.0
-            yield LoopStatus(
-                LoopState.EVALUATE, iteration, true_target, commanded, solve, error_arcmin,
-            )
+                if error_arcmin <= self._config.tolerance_arcmin:
+                    # No automatic sync here -- a plate solve this close is still
+                    # not proof the mount is centered on `true_target` for the
+                    # user's actual optical path (e.g. a finder-scope/main-scope
+                    # offset), only that cedar thinks it is. See
+                    # ClosedLoopTelescopeBackend.sync_to_target() for the
+                    # manual, user-confirmed sync this replaced.
+                    yield LoopStatus(
+                        LoopState.CONVERGED, iteration, true_target, commanded, solve, error_arcmin,
+                        message="converged",
+                    )
+                    return
 
-            if error_arcmin <= self._config.tolerance_arcmin:
-                # No automatic sync here -- a plate solve this close is still
-                # not proof the mount is centered on `true_target` for the
-                # user's actual optical path (e.g. a finder-scope/main-scope
-                # offset), only that cedar thinks it is. See
-                # ClosedLoopTelescopeBackend.sync_to_target() for the
-                # manual, user-confirmed sync this replaced.
-                yield LoopStatus(
-                    LoopState.CONVERGED, iteration, true_target, commanded, solve, error_arcmin,
-                    message="converged",
-                )
-                return
+                if (
+                    self._config.max_correction_arcmin is not None
+                    and error_arcmin > self._config.max_correction_arcmin
+                ):
+                    yield LoopStatus(
+                        LoopState.OUT_OF_RANGE, iteration, true_target, commanded, solve, error_arcmin,
+                        message=(
+                            f"error {error_arcmin:.1f}' exceeds max_correction_arcmin "
+                            f"({self._config.max_correction_arcmin:.1f}') -- not nudging automatically"
+                        ),
+                    )
+                    return
 
-            if (
-                self._config.max_correction_arcmin is not None
-                and error_arcmin > self._config.max_correction_arcmin
-            ):
-                yield LoopStatus(
-                    LoopState.OUT_OF_RANGE, iteration, true_target, commanded, solve, error_arcmin,
-                    message=(
-                        f"error {error_arcmin:.1f}' exceeds max_correction_arcmin "
-                        f"({self._config.max_correction_arcmin:.1f}') -- not nudging automatically"
-                    ),
-                )
-                return
+                iteration += 1
+                if iteration >= self._config.max_iterations:
+                    yield LoopStatus(
+                        LoopState.FAILED, iteration, true_target, commanded, solve, error_arcmin,
+                        message=f"did not converge within {self._config.max_iterations} iterations",
+                    )
+                    return
 
-            iteration += 1
-            if iteration >= self._config.max_iterations:
-                yield LoopStatus(
-                    LoopState.FAILED, iteration, true_target, commanded, solve, error_arcmin,
-                    message=f"did not converge within {self._config.max_iterations} iterations",
-                )
-                return
-
-            commanded = offset_correction(true_target, commanded, actual)
+                commanded = offset_correction(true_target, commanded, actual)
+        finally:
+            if restore_after_correction is not None:
+                await restore_after_correction()
 
     async def _wait_for_settle(self) -> None:
         deadline = time.monotonic() + self._config.mount_slewing_timeout_s
