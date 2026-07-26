@@ -185,6 +185,18 @@ class IndiConnection:
         widget.setState(self._PyIndi.ISS_ON)
         self._client.sendNewSwitch(vec)
 
+    async def clear_switch(self, prop: str) -> None:
+        """Resets a one-of-many switch vector to all-off and sends it --
+        used to stop a momentary jog (TELESCOPE_MOTION_NS/WE) without
+        TELESCOPE_ABORT_MOTION's broader "stop everything" effect."""
+        await self.wait_for_property(prop)
+        await asyncio.to_thread(self._clear_switch_sync, prop)
+
+    def _clear_switch_sync(self, prop: str) -> None:
+        vec = self._device().getSwitch(prop)
+        vec.reset()
+        self._client.sendNewSwitch(vec)
+
     async def wait_for_switch_confirmed(self, prop: str, elem: str, timeout_s: float = 3.0) -> None:
         """Poll until the driver's own echo confirms `elem` is On.
 

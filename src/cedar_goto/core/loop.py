@@ -17,6 +17,7 @@ from cedar_goto.core.solve import SolveAcceptance, SolveResult
 
 class LoopState(Enum):
     IDLE = auto()
+    PRESYNC = auto()
     SLEWING_MOUNT = auto()
     SETTLING = auto()
     AWAIT_SOLVE = auto()
@@ -103,14 +104,46 @@ class ClosedLoopSlew:
         # no equivalent -- a no-op there is correct, not a missing feature.
         prepare_for_correction = getattr(self._mount, "prepare_for_correction", None)
         restore_after_correction = getattr(self._mount, "restore_after_correction", None)
+        # Same getattr'd-optional-capability pattern, for the mount's own
+        # alignment/pointing-model sync points (INDI's generic Alignment
+        # Subsystem). Found live 2026-07-26: a GOTO immediately preceded by
+        # syncing the mount to a fresh, boresight-accurate solve of its
+        # current position is far more reliable than a bare GOTO relying on
+        # whatever alignment already existed -- see the PRESYNC step below.
+        # Done fresh every iteration (not just once at the start): each
+        # iteration's presync point is deleted again right after its GOTO
+        # (delete_sync_point, not clear_sync_points) so the set never grows
+        # past whatever the user already had before this run started --
+        # confirmed live that leaving points to accumulate destabilizes this
+        # mount's pointing model ("go haywire"), but wiping the whole set
+        # would also destroy points the user added earlier in the session by
+        # their own alignment routine, which isn't ours to discard.
+        get_sync_point_count = getattr(self._mount, "get_sync_point_count", None)
+        delete_sync_point = getattr(self._mount, "delete_sync_point", None)
+        can_presync = get_sync_point_count is not None and delete_sync_point is not None
         if prepare_for_correction is not None:
             await prepare_for_correction()
         try:
             while True:
+                our_sync_point_index = None
+                if can_presync:
+                    self._check_abort()
+                    yield LoopStatus(LoopState.PRESYNC, iteration, true_target, commanded)
+                    presync_solve = await self._await_fresh_accepted_solve()
+                    if presync_solve is not None and presync_solve.is_plate_solve:
+                        baseline_count = await get_sync_point_count()
+                        await self._mount.sync_to(presync_solve.sky_coord)
+                        new_count = await get_sync_point_count()
+                        if new_count > baseline_count:
+                            our_sync_point_index = new_count - 1
+
                 self._check_abort()
                 yield LoopStatus(LoopState.SLEWING_MOUNT, iteration, true_target, commanded)
                 await self._mount.slew_to(commanded)
                 await self._wait_for_settle()
+
+                if our_sync_point_index is not None:
+                    await delete_sync_point(our_sync_point_index)
 
                 self._check_abort()
                 yield LoopStatus(LoopState.SETTLING, iteration, true_target, commanded)
