@@ -29,6 +29,29 @@ from cedar_goto.core.solve import SolveResult
 logger = logging.getLogger(__name__)
 
 
+def _solve_epoch(ps: cedar_common_pb2.PlateSolution, coord: cedar_common_pb2.CelestialCoord) -> float:
+    """SolveSource must emit J2000 (epoch-seam decision, 2026-07-26), but
+    cedar-server doesn't always say so honestly: ps.epoch_equinox is a bare
+    int32 (cedar.proto), not `optional`, so an unset one reads as 0 rather
+    than being absent -- and it can legitimately be 1950 for an old B1950
+    BSC5 catalog, not always 2000. Prefer it when non-zero (it's the
+    solver's own claim about its catalog); fall back to CelestialCoord.epoch
+    (also not `optional` in this build -- observed unset in practice); fall
+    back to 2000.0 (the plate-solver default, and correct for every
+    catalog/solver combination confirmed so far). Logs rather than raises
+    when the two disagree -- this is best-effort epoch archaeology on data
+    cedar-server itself doesn't always populate, not a hard contract."""
+    coord_epoch = coord.epoch if coord.HasField("epoch") else None
+    if ps.epoch_equinox:
+        if coord_epoch is not None and abs(ps.epoch_equinox - coord_epoch) > 1e-6:
+            logger.warning(
+                "cedar plate solution epoch mismatch: epoch_equinox=%s vs CelestialCoord.epoch=%s "
+                "-- using epoch_equinox", ps.epoch_equinox, coord_epoch,
+            )
+        return float(ps.epoch_equinox)
+    return coord_epoch if coord_epoch is not None else 2000.0
+
+
 def _to_solve_result(frame: cedar_pb2.FrameResult) -> SolveResult | None:
     """frame.has_result is deliberately not checked here: per cedar.proto,
     it's only populated for non_blocking requests (GetFrame's early-return
@@ -76,7 +99,7 @@ def _to_solve_result(frame: cedar_pb2.FrameResult) -> SolveResult | None:
         sky_coord=CelestialCoord(
             ra_deg=coord.ra,
             dec_deg=coord.dec,
-            epoch=coord.epoch if coord.HasField("epoch") else 2000.0,
+            epoch=_solve_epoch(ps, coord),
         ),
         capture_time_unix=frame.capture_time.ToNanoseconds() / 1e9,
         num_matches=ps.num_matches,
@@ -145,10 +168,19 @@ class CedarGrpcClient(SolveSource):
         since cedar-goto intercepts the ASCOM slew instead of forwarding it.
         Best-effort: a failure here must not break the actual mount
         nudging, which doesn't depend on cedar-server knowing about it."""
+        # target.epoch is set explicitly rather than left to the proto's
+        # documented "defaults to 2000.0 if omitted" -- this client is meant
+        # to receive J2000 targets already (EpochNormalizingSolveSource
+        # converts working-epoch -> J2000 before calling here), and an
+        # explicit field survives a future change to that default or to what
+        # calls this method without silently reintroducing the mis-tag bug
+        # the epoch-seam decision (2026-07-26) closed.
         try:
             await self._stub.InitiateAction(
                 cedar_pb2.ActionRequest(
-                    initiate_slew=cedar_common_pb2.CelestialCoord(ra=target.ra_deg, dec=target.dec_deg)
+                    initiate_slew=cedar_common_pb2.CelestialCoord(
+                        ra=target.ra_deg, dec=target.dec_deg, epoch=target.epoch
+                    )
                 )
             )
         except grpc.RpcError as exc:

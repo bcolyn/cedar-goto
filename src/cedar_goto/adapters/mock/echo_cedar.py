@@ -1,11 +1,18 @@
 """A SolveSource that reports the mount's own position as if it were a
 plate-solve.
 
-Lets the closed loop -- and critically, the *real* Alpaca mount adapter's
-epoch handling (JNow -> J2000) -- be exercised end-to-end against real
-hardware without a working cedar-server (e.g. daylight, no stars). Not a
-production component: it isn't independent ground truth, just a loopback
-for validating the plumbing.
+Lets the closed loop be exercised end-to-end against real hardware without a
+working cedar-server (e.g. daylight, no stars). Not a production component:
+it isn't independent ground truth, just a loopback for validating the
+plumbing.
+
+Emits solves tagged J2000 via precess_to_j2000(), same as every other
+SolveSource (epoch-seam decision, 2026-07-26: the port's contract is "always
+J2000", enforced by EpochNormalizingSolveSource downstream) -- even though
+the mount's own position is already close to a no-op round-trip through this
+particular loopback. Kept for uniformity (every SolveSource honors the same
+contract, so nothing downstream needs to special-case this one) rather than
+skipping the conversion to save what's usually a near-free precess() call.
 
 Every solve is marked is_plate_solve=False (core/solve.py) -- the loop and
 UI sync paths (core/loop.py, web/closed_loop_backend.py) refuse to

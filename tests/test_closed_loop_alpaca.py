@@ -579,3 +579,72 @@ async def test_position_prefers_cedar_when_configured_and_fresh():
         # MockCedar reports the world's true pointing (0,0 initially) as an
         # accepted solve -- should be preferred over the mount's own report.
         assert ra == pytest.approx(0.0, abs=1e-6)
+
+
+class _RecordingMount:
+    """Wraps a MountControl, recording every slew_to() target -- for
+    asserting exactly what reaches the mount, unlike World's true_pointing
+    which has the harmonic error model applied on top."""
+
+    def __init__(self, inner) -> None:
+        self._inner = inner
+        self.slew_targets: list[CelestialCoord] = []
+
+    async def slew_to(self, target: CelestialCoord) -> None:
+        self.slew_targets.append(target)
+        await self._inner.slew_to(target)
+
+    async def is_slewing(self) -> bool:
+        return await self._inner.is_slewing()
+
+    async def sync_to(self, coord: CelestialCoord) -> None:
+        await self._inner.sync_to(coord)
+
+    async def get_equatorial_system(self) -> float:
+        return await self._inner.get_equatorial_system()
+
+    async def get_position(self) -> CelestialCoord:
+        return await self._inner.get_position()
+
+    async def abort_slew(self) -> None:
+        await self._inner.abort_slew()
+
+
+async def test_slew_target_reaches_the_mount_unconverted_in_its_own_epoch():
+    """Epoch-seam decision (2026-07-26) regression test: a client's raw
+    RightAscension/Declination numbers must reach mount.slew_to() completely
+    unconverted, tagged with exactly the epoch this device itself advertises
+    -- not silently re-tagged J2000 and precessed away from what the client
+    actually sent, the double-conversion that caused the ~9' Polaris bug
+    this decision fixed. Uses a non-J2000 advertised epoch (unlike every
+    other test in this file, which defaults to J2000 and so couldn't tell a
+    fixed epoch-tag bug from a bit-for-bit pass-through)."""
+    from cedar_goto.core.epoch_normalizing_solve_source import EpochNormalizingSolveSource
+
+    world = World(error_model=HarmonicErrorModel())
+    non_j2000_epoch = 1950.0
+    mount = _RecordingMount(MockMount(world, equatorial_system=non_j2000_epoch))
+    inner = MockTelescopeBackend(world)
+    cedar = EpochNormalizingSolveSource(MockCedar(world), mount.get_equatorial_system)
+    config = LoopConfigCore(tolerance_arcmin=1.0, max_iterations=1, settle_s=0.01)
+    backend = ClosedLoopTelescopeBackend(
+        inner, mount, cedar, config, SolveAcceptance(), PositionSourceConfig(source="mount")
+    )
+    async with await make_client(backend) as client:
+        await client.put("/api/v1/telescope/0/connected", data={"Connected": "true"})
+        await client.put(
+            "/api/v1/telescope/0/slewtocoordinatesasync",
+            data={"RightAscension": "8.0", "Declination": "30.0"},
+        )
+        for _ in range(50):
+            await asyncio.sleep(0.02)
+            if mount.slew_targets:
+                break
+        else:
+            pytest.fail("mount.slew_to() was never called")
+
+    target = mount.slew_targets[0]
+    assert target.epoch == pytest.approx(non_j2000_epoch)
+    # Bit-for-bit the client's input (8.0h * 15 = 120.0deg), not precessed.
+    assert target.ra_deg == pytest.approx(120.0, abs=1e-9)
+    assert target.dec_deg == pytest.approx(30.0, abs=1e-9)

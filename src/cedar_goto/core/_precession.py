@@ -7,12 +7,12 @@ from __future__ import annotations
 from astropy.coordinates import FK5
 from astropy.time import Time
 
-from cedar_goto.core.coords import J2000, CelestialCoord
+from cedar_goto.core.coords import EPOCH_MATCH_TOLERANCE_YR, J2000, CelestialCoord
 
 
 def precess(coord: CelestialCoord, target_epoch: float) -> CelestialCoord:
     """Precess `coord` from its own epoch to `target_epoch` (both Julian years)."""
-    if abs(coord.epoch - target_epoch) < 1e-9:
+    if abs(coord.epoch - target_epoch) < EPOCH_MATCH_TOLERANCE_YR:
         return coord
 
     from astropy.coordinates import SkyCoord

@@ -14,7 +14,7 @@ from typing import Callable
 
 from cedar_goto.adapters.buzzer import Buzzer, NullBuzzer
 from cedar_goto.config import PositionSourceConfig
-from cedar_goto.core.coords import J2000, CelestialCoord
+from cedar_goto.core.coords import CelestialCoord
 from cedar_goto.core.loop import (
     ClosedLoopSlew,
     LoopConfigCore,
@@ -160,8 +160,17 @@ class ClosedLoopTelescopeBackend:
         # of a slew attempt that the mount silently ignores or hangs on.
         if await self._inner.get(_AT_PARK_MEMBER):
             raise ParkedError("Cannot slew while the mount is parked -- unpark first")
+        # Tagged with the mount's own advertised epoch, not a hardcoded
+        # J2000 (epoch-seam decision, 2026-07-26): an Alpaca/INDI client is
+        # required to send coordinates in whatever epoch this device's own
+        # EquatorialSystem advertises (JNow for the real INDI mount), same
+        # as the bare-proxy slew path already assumed -- tagging them J2000
+        # here made this path silently disagree with that one by ~26 years
+        # of precession (~9' near Polaris).
         target = CelestialCoord(
-            ra_deg=params["RightAscension"] * 15.0, dec_deg=params["Declination"], epoch=J2000
+            ra_deg=params["RightAscension"] * 15.0,
+            dec_deg=params["Declination"],
+            epoch=await self._mount.get_equatorial_system(),
         )
         self._last_target = target
         # cedar-goto intercepts the ASCOM slew and drives the mount itself,
@@ -346,12 +355,10 @@ class ClosedLoopTelescopeBackend:
     async def _cedar_position(self) -> tuple[float, float] | None:
         """DESIGN.md §3 "Reported position": cedar-preferred with mount
         fallback -- returns None (falls back to inner/mount) when cedar has
-        no fresh, acceptable solve. Reports cedar's coordinate directly in
-        J2000 rather than converting to the mount's advertised
-        EquatorialSystem -- an acceptable Phase 2 simplification since
-        cedar-goto normalizes internally to J2000 (DESIGN.md §4); exact
-        epoch-matching for strict clients is a follow-up if it matters in
-        practice.
+        no fresh, acceptable solve. `self._cedar` is expected to already be
+        an EpochNormalizingSolveSource (wired in __main__._build_backend),
+        so solve.sky_coord arrives in the mount's own advertised epoch, not
+        raw J2000 -- this can report it as-is instead of converting here.
 
         A cedar-server outage (unreachable, gRPC error -- not just "no
         solve yet") must degrade the same way: "cedar_fallback_mount"

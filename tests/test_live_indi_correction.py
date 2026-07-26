@@ -52,8 +52,9 @@ from typing import AsyncIterator
 import pytest
 
 from cedar_goto.config import PositionSourceConfig
-from cedar_goto.core._precession import precess_to_j2000
+from cedar_goto.core._precession import precess, precess_to_j2000
 from cedar_goto.core.coords import J2000, CelestialCoord, angular_separation_deg
+from cedar_goto.core.epoch_normalizing_solve_source import EpochNormalizingSolveSource
 from cedar_goto.core.loop import LoopConfigCore
 from cedar_goto.core.ports import MountControl, SolveSource
 from cedar_goto.core.solve import SolveAcceptance, SolveResult
@@ -294,10 +295,18 @@ async def rig():
     indi_mount = IndiMountClient(conn)
     mount = RecordingMount(indi_mount)
     solver = ScriptedPlateSolver(mount, offsets_arcmin=[0.0, GOTO_ERROR_ARCMIN])
+    # Mirrors __main__._build_backend's wiring: ScriptedPlateSolver emits
+    # J2000 (like any SolveSource), the closed loop works in the mount's own
+    # epoch (JNow for this real INDI mount) -- EpochNormalizingSolveSource is
+    # the seam between them (epoch-seam decision, 2026-07-26). Without this
+    # wrap, core/loop.py's angular_separation_deg()/offset_correction() would
+    # immediately raise EpochMismatchError comparing a JNow target against a
+    # J2000 solve.
+    cedar = EpochNormalizingSolveSource(solver, mount.get_equatorial_system)
     backend = ClosedLoopTelescopeBackend(
         inner,
         mount,
-        solver,
+        cedar,
         LoopConfigCore(
             tolerance_arcmin=_TOLERANCE_ARCMIN,
             max_correction_arcmin=None,  # must not trip on the injected 10' error
@@ -339,14 +348,19 @@ async def rig():
 
     for star, name in ((ALPHA_UMA, "alpha UMa"), (ALPHA_CAS, "alpha Cas")):
         print(f"setup: slewing to {name} and syncing")
-        await indi_mount.slew_to(star)
+        # star is a J2000 catalog position; IndiMountClient no longer
+        # converts epochs itself (epoch-seam decision, 2026-07-26) -- this
+        # test drives it directly, bypassing the closed loop, so it must
+        # convert here the same way EpochNormalizingSolveSource would.
+        star_jnow = precess(star, await indi_mount.get_equatorial_system())
+        await indi_mount.slew_to(star_jnow)
         await _settle(indi_mount)
         # Syncing to the catalog position the mount was just sent to is a
         # near-zero correction on purpose: this is building an alignment
         # database for the test to count, not re-aligning the mount, and a
         # real offset here would move the pointing model out from under the
         # correction we're actually measuring.
-        await indi_mount.sync_to(star)
+        await indi_mount.sync_to(star_jnow)
         await asyncio.sleep(1.0)
 
     baseline = await indi_mount.get_sync_point_count()
@@ -384,22 +398,23 @@ async def _is_unparked(inner) -> bool:
 
 
 async def test_correct_now_converges_on_polaris_and_cleans_up_its_sync_points(rig: Rig):
-    backend, mount, solver = rig.backend, rig.mount, rig.solver
+    backend, mount, solver, indi_mount = rig.backend, rig.mount, rig.solver, rig.indi_mount
 
     # GoTo Polaris through the real Alpaca surface. Auto-correction is off,
     # so this is a bare proxy slew -- exactly the situation "correct now"
     # exists for: the slew is done, and only then does the user ask for a
     # cedar-driven correction.
     #
-    # Note the proxy path passes RA/Dec to INDI unconverted (JNow, per the
-    # advertised EquatorialSystem) while the closed loop treats the same
-    # numbers as J2000 and precesses -- so this GoTo lands ~9' from where
-    # the loop then thinks Polaris is. That's a real inconsistency in
-    # cedar-goto, not a fixture artifact; it just means the loop's first
-    # presync has ~9' of genuine work to do on top of the injected 10'.
+    # RightAscension/Declination must be sent in this device's advertised
+    # EquatorialSystem (JNow), same as any real Alpaca/INDI client -- both
+    # the bare-proxy slew path and (since the epoch-seam decision,
+    # 2026-07-26) the closed-loop path now honor that consistently, so the
+    # loop's first presync only has the injected 10' error to correct, not
+    # ~9' of genuine mis-tagged-epoch drift on top of it.
+    polaris_jnow = precess(POLARIS, await indi_mount.get_equatorial_system())
     await backend.put(
         ALL_MEMBERS_BY_ACTION["slewtocoordinatesasync"],
-        {"RightAscension": POLARIS.ra_deg / 15.0, "Declination": POLARIS.dec_deg},
+        {"RightAscension": polaris_jnow.ra_deg / 15.0, "Declination": polaris_jnow.dec_deg},
     )
     await _settle(mount)
     assert mount.events == [], "a bare proxy slew must not drive the mount client at all"

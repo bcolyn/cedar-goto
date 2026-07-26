@@ -102,26 +102,27 @@ def backend(fake: FakeIndiConnection) -> IndiTelescopeBackend:
 
 
 async def test_slew_to_sets_track_then_coordinates(mount, fake):
-    # epoch=_current_jyear() makes _to_mount_epoch's precession step a
-    # no-op, so the sent numbers match the input exactly.
     await mount.slew_to(CelestialCoord(ra_deg=120.0, dec_deg=30.0, epoch=_current_jyear()))
     assert fake.sent_switches == [(_ON_COORD_SET, "TRACK")]
     sent_prop, sent_values = fake.sent_numbers[-1]
     assert sent_prop == _EQUATORIAL_EOD_COORD
-    # epoch=_current_jyear() at construction vs. inside _to_mount_epoch()
-    # differ by microseconds of wall-clock time -- precess() takes the
-    # non-identity path and introduces sub-microarcsecond float noise.
     assert sent_values["RA"] == pytest.approx(8.0)
     assert sent_values["DEC"] == pytest.approx(30.0)
 
 
-async def test_slew_to_precesses_from_j2000_to_mount_epoch(mount, fake):
-    await mount.slew_to(CelestialCoord(ra_deg=120.0, dec_deg=30.0))  # default epoch=J2000
-    sent_ra_deg = fake.sent_numbers[-1][1]["RA"] * 15.0
-    # ~26 years of precession from J2000 is a small but non-zero drift --
-    # this must NOT equal the unprecessed input.
-    assert sent_ra_deg != pytest.approx(120.0, abs=1e-6)
-    assert sent_ra_deg == pytest.approx(120.0, abs=0.5)
+async def test_slew_to_passes_coordinates_through_unconverted(mount, fake, caplog):
+    """Epoch-seam decision (2026-07-26): IndiMountClient no longer converts
+    epochs itself -- a J2000-tagged coordinate (the default) is sent to the
+    driver exactly as given, not precessed to JNow. The mismatch is only
+    logged (_check_epoch's regression tripwire), never silently fixed up."""
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        await mount.slew_to(CelestialCoord(ra_deg=120.0, dec_deg=30.0))  # default epoch=J2000
+    sent_values = fake.sent_numbers[-1][1]
+    assert sent_values["RA"] == pytest.approx(8.0)
+    assert sent_values["DEC"] == pytest.approx(30.0)
+    assert "epoch=2000" in caplog.text
 
 
 async def test_is_slewing_reflects_busy_state(mount, fake):

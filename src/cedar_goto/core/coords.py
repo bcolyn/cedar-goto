@@ -10,6 +10,27 @@ from dataclasses import dataclass
 
 J2000 = 2000.0
 
+EPOCH_MATCH_TOLERANCE_YR = 1e-4
+"""~52 minutes of Julian year. Two honestly-tagged coordinates that are
+"the same epoch" in practice (e.g. two JNow reads a few seconds apart) never
+land on the exact same float -- this absorbs that clock-skew noise while
+still catching a real epoch bug, which differs by whole years to decades
+(the mis-tag this tolerance was introduced to catch: ~26 years, see
+epoch-seam decision 2026-07-26). Shared by the EpochMismatchError guards
+below and by _precession.precess()'s no-op short-circuit."""
+
+
+class EpochMismatchError(ValueError):
+    """Raised by angular_separation_deg()/offset_correction() when the
+    coordinates they were given carry different epochs (beyond
+    EPOCH_MATCH_TOLERANCE_YR). Comparing across epochs silently produces a
+    wrong-but-plausible answer (a few arcminutes near the pole per few
+    decades) instead of an error -- exactly the bug the epoch-seam decision
+    (2026-07-26, at the SolveSource port) closed. These two functions are
+    the last line of defense against it recurring: every caller in
+    core/loop.py is expected to already be working in one consistent
+    (mount-advertised) epoch."""
+
 
 @dataclass(frozen=True, slots=True)
 class CelestialCoord:
@@ -35,11 +56,14 @@ class CelestialCoord:
 
 
 def angular_separation_deg(a: CelestialCoord, b: CelestialCoord) -> float:
-    """Great-circle separation in degrees between two J2000 coordinates.
-
-    Both inputs must already be in the same epoch (normalize with to_j2000()
-    first) — this function does not convert.
+    """Great-circle separation in degrees between two coordinates in the
+    same epoch. Raises EpochMismatchError if they differ by more than
+    EPOCH_MATCH_TOLERANCE_YR — this function does not convert.
     """
+    if abs(a.epoch - b.epoch) > EPOCH_MATCH_TOLERANCE_YR:
+        raise EpochMismatchError(
+            f"angular_separation_deg: epoch mismatch (a.epoch={a.epoch}, b.epoch={b.epoch})"
+        )
     ra1, dec1 = math.radians(a.ra_deg), math.radians(a.dec_deg)
     ra2, dec2 = math.radians(b.ra_deg), math.radians(b.dec_deg)
 
@@ -64,7 +88,21 @@ def offset_correction(true_target: CelestialCoord, commanded: CelestialCoord, ac
     off the *true* target the last solve landed. Accumulates across
     iterations so a roughly-constant local pointing offset is cancelled in
     2-3 passes. Dec is clamped to the valid range; RA wraps mod 360.
+
+    Raises EpochMismatchError if true_target/commanded/actual don't all
+    agree on epoch (within EPOCH_MATCH_TOLERANCE_YR) — see
+    angular_separation_deg().
     """
+    if true_target.epoch != commanded.epoch:
+        raise EpochMismatchError(
+            f"offset_correction: true_target/commanded epoch mismatch "
+            f"(true_target.epoch={true_target.epoch}, commanded.epoch={commanded.epoch})"
+        )
+    if abs(true_target.epoch - actual.epoch) > EPOCH_MATCH_TOLERANCE_YR:
+        raise EpochMismatchError(
+            f"offset_correction: true_target/actual epoch mismatch "
+            f"(true_target.epoch={true_target.epoch}, actual.epoch={actual.epoch})"
+        )
     dra = true_target.ra_deg - actual.ra_deg
     ddec = true_target.dec_deg - actual.dec_deg
     new_ra = _wrap_ra(commanded.ra_deg + dra)

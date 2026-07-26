@@ -11,12 +11,15 @@ verified at first bring-up per DESIGN.md §3a/§11.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 
 from alpaca.telescope import EquatorialCoordinateType, Telescope
 
-from cedar_goto.core.coords import CelestialCoord
+from cedar_goto.core.coords import EPOCH_MATCH_TOLERANCE_YR, CelestialCoord
 from cedar_goto.core.ports import MountControl
+
+logger = logging.getLogger(__name__)
 
 # equTopocentric ("JNow") has no fixed epoch — it moves with the current
 # date. Fixed epochs map directly; topocentric is resolved to "now" in
@@ -40,18 +43,18 @@ class AlpacaMountClient(MountControl):
         self._telescope = Telescope(f"{host}:{port}" if port else address, device_number)
 
     async def slew_to(self, target: CelestialCoord) -> None:
-        mount_target = await self._to_mount_epoch(target)
+        await self._check_epoch(target)
         await asyncio.to_thread(
-            self._telescope.SlewToCoordinatesAsync, mount_target.ra_deg / 15.0, mount_target.dec_deg
+            self._telescope.SlewToCoordinatesAsync, target.ra_deg / 15.0, target.dec_deg
         )
 
     async def is_slewing(self) -> bool:
         return await asyncio.to_thread(lambda: self._telescope.Slewing)
 
     async def sync_to(self, coord: CelestialCoord) -> None:
-        mount_coord = await self._to_mount_epoch(coord)
+        await self._check_epoch(coord)
         await asyncio.to_thread(
-            self._telescope.SyncToCoordinates, mount_coord.ra_deg / 15.0, mount_coord.dec_deg
+            self._telescope.SyncToCoordinates, coord.ra_deg / 15.0, coord.dec_deg
         )
 
     async def get_equatorial_system(self) -> float:
@@ -71,10 +74,18 @@ class AlpacaMountClient(MountControl):
     async def abort_slew(self) -> None:
         await asyncio.to_thread(self._telescope.AbortSlew)
 
-    async def _to_mount_epoch(self, coord: CelestialCoord) -> CelestialCoord:
-        """cedar-goto works internally in J2000 (DESIGN.md §4); convert to
-        whatever epoch the mount currently advertises before sending."""
-        from cedar_goto.core._precession import precess
-
+    async def _check_epoch(self, coord: CelestialCoord) -> None:
+        """Regression tripwire, not a conversion (epoch-seam decision,
+        2026-07-26): this driver no longer converts epochs itself -- the
+        single conversion seam is EpochNormalizingSolveSource, upstream of
+        core/loop.py, so every coordinate reaching this class is expected to
+        already be tagged in this mount's own advertised EquatorialSystem.
+        Logs rather than raises -- a wrong tag is a correctness bug in the
+        caller, not a reason to abort an in-progress slew command."""
         mount_epoch = await self.get_equatorial_system()
-        return precess(coord, mount_epoch)
+        if abs(coord.epoch - mount_epoch) > EPOCH_MATCH_TOLERANCE_YR:
+            logger.warning(
+                "AlpacaMountClient received a coordinate tagged epoch=%.4f but this mount's "
+                "advertised EquatorialSystem is epoch=%.4f -- caller failed to convert (the "
+                "epoch seam belongs on SolveSource, not here)", coord.epoch, mount_epoch,
+            )

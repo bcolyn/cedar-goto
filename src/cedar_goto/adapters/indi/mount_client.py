@@ -9,11 +9,14 @@ MountControl method.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 
 from cedar_goto.adapters.indi.client import IndiConnection
-from cedar_goto.core.coords import CelestialCoord
+from cedar_goto.core.coords import EPOCH_MATCH_TOLERANCE_YR, CelestialCoord
 from cedar_goto.core.ports import MountControl
+
+logger = logging.getLogger(__name__)
 
 _EQUATORIAL_EOD_COORD = "EQUATORIAL_EOD_COORD"
 _ON_COORD_SET = "ON_COORD_SET"
@@ -180,11 +183,11 @@ class IndiMountClient(MountControl):
         the closed loop's own solve-based EVALUATE is the real accuracy
         check; this only gets the mount close via its own encoders first,
         the same way a human nudges a jog stick while watching the display."""
-        mount_target = await self._to_mount_epoch(target)
+        await self._check_epoch(target)
         for _ in range(_NUDGE_MAX_ITERATIONS):
             pos = await self.get_position()
-            dra_arcsec = _wrap_signed_deg(mount_target.ra_deg - pos.ra_deg) * 3600.0
-            ddec_arcsec = (mount_target.dec_deg - pos.dec_deg) * 3600.0
+            dra_arcsec = _wrap_signed_deg(target.ra_deg - pos.ra_deg) * 3600.0
+            ddec_arcsec = (target.dec_deg - pos.dec_deg) * 3600.0
             need_ns = abs(ddec_arcsec) > _NUDGE_TOLERANCE_ARCSEC
             need_we = abs(dra_arcsec) > _NUDGE_TOLERANCE_ARCSEC
             if not need_ns and not need_we:
@@ -218,22 +221,22 @@ class IndiMountClient(MountControl):
     async def slew_to(self, target: CelestialCoord) -> None:
         # ON_COORD_SET=TRACK, not SLEW -- goto-and-track semantics, matching
         # what SlewToCoordinatesAsync is expected to do (indi-refactor.md).
-        mount_target = await self._to_mount_epoch(target)
+        await self._check_epoch(target)
         await self._conn.set_switch(_ON_COORD_SET, "TRACK")
         await self._conn.wait_for_switch_confirmed(_ON_COORD_SET, "TRACK")
         await self._conn.set_numbers(
-            _EQUATORIAL_EOD_COORD, {"RA": mount_target.ra_deg / 15.0, "DEC": mount_target.dec_deg}
+            _EQUATORIAL_EOD_COORD, {"RA": target.ra_deg / 15.0, "DEC": target.dec_deg}
         )
 
     async def is_slewing(self) -> bool:
         return await self._conn.is_property_busy(_EQUATORIAL_EOD_COORD)
 
     async def sync_to(self, coord: CelestialCoord) -> None:
-        mount_coord = await self._to_mount_epoch(coord)
+        await self._check_epoch(coord)
         await self._conn.set_switch(_ON_COORD_SET, "SYNC")
         await self._conn.wait_for_switch_confirmed(_ON_COORD_SET, "SYNC")
         await self._conn.set_numbers(
-            _EQUATORIAL_EOD_COORD, {"RA": mount_coord.ra_deg / 15.0, "DEC": mount_coord.dec_deg}
+            _EQUATORIAL_EOD_COORD, {"RA": coord.ra_deg / 15.0, "DEC": coord.dec_deg}
         )
 
     async def get_equatorial_system(self) -> float:
@@ -252,10 +255,18 @@ class IndiMountClient(MountControl):
     async def abort_slew(self) -> None:
         await self._conn.set_switch("TELESCOPE_ABORT_MOTION", "ABORT")
 
-    async def _to_mount_epoch(self, coord: CelestialCoord) -> CelestialCoord:
-        """cedar-goto works internally in J2000 (DESIGN.md §4); convert to
-        JNow (this driver's only epoch, indi-refactor.md) before sending."""
-        from cedar_goto.core._precession import precess
-
+    async def _check_epoch(self, coord: CelestialCoord) -> None:
+        """Regression tripwire, not a conversion (epoch-seam decision,
+        2026-07-26): this driver no longer converts epochs itself -- the
+        single conversion seam is EpochNormalizingSolveSource, upstream of
+        core/loop.py, so every coordinate reaching this class is expected to
+        already be tagged in this mount's own working epoch (JNow). Logs
+        rather than raises -- a wrong tag is a correctness bug in the
+        caller, not a reason to abort an in-progress slew command."""
         mount_epoch = await self.get_equatorial_system()
-        return precess(coord, mount_epoch)
+        if abs(coord.epoch - mount_epoch) > EPOCH_MATCH_TOLERANCE_YR:
+            logger.warning(
+                "IndiMountClient received a coordinate tagged epoch=%.4f but this mount's "
+                "working epoch is %.4f -- caller failed to convert (the epoch seam belongs on "
+                "SolveSource, not here)", coord.epoch, mount_epoch,
+            )

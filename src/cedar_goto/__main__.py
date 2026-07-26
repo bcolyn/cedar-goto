@@ -107,6 +107,14 @@ def _build_backend(config: Config, state_path: Path) -> TelescopeBackend:
         logger.info("Using real cedar gRPC solve source at %s", config.cedar.address)
         cedar = CedarGrpcClient(config.cedar.address)
 
+    from cedar_goto.core.epoch_normalizing_solve_source import EpochNormalizingSolveSource
+
+    # The single epoch-conversion seam (epoch-seam decision, 2026-07-26):
+    # every SolveSource emits J2000; cedar-goto works internally in whatever
+    # epoch `mount` itself advertises. Applied uniformly, including to the
+    # mock sources -- see EpochNormalizingSolveSource's docstring.
+    cedar = EpochNormalizingSolveSource(cedar, mount.get_equatorial_system)
+
     persisted = load_state(state_path, default_correction_enabled=config.loop.correction_enabled)
 
     def _persist_correction_enabled(enabled: bool) -> None:
