@@ -126,6 +126,33 @@ class IndiConnection:
             await self._wait_for("__device__", f"device {self._device_name!r} never appeared")
             self._connected = True
 
+    async def is_device_connected(self) -> bool:
+        """Whether the *driver* has connected to the mount hardware.
+
+        Distinct from ensure_connected(), which only connects this client to
+        indiserver. Found 2026-07-26: with the driver disconnected (mount
+        powered off, or DEVICE_PORT naming a cable that isn't plugged in --
+        the /dev/serial/by-id path changes with the cable), indiserver still
+        publishes the device and ensure_connected() succeeds, but none of
+        the properties that matter (TELESCOPE_PARK, EQUATORIAL_EOD_COORD,
+        ON_COORD_SET) ever arrive. Every read then fails with a confusing
+        "property never appeared" timeout instead of saying the mount isn't
+        connected.
+        """
+        await self.ensure_connected()
+        # ensure_connected() only waits for the device *name* to show up
+        # (newDevice); its property definitions, CONNECTION among them,
+        # stream in afterwards. Reading isConnected() before CONNECTION has
+        # been parsed would report a connected mount as disconnected, so
+        # wait for the property first rather than assume the ordering. A
+        # CONNECTION that never arrives at all is a genuine "not usable".
+        try:
+            await self.wait_for_property("CONNECTION")
+        except IndiConnectionError:
+            return False
+        device = self._device()
+        return device.isValid() and device.isConnected()
+
     async def wait_for_property(self, name: str) -> None:
         await self.ensure_connected()
         device = self._client.getDevice(self._device_name)

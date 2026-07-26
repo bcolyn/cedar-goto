@@ -43,6 +43,80 @@ class _SyncCountingMount:
         await self._inner.abort_slew()
 
 
+class _LaggingSyncPointMount(_SyncCountingMount):
+    """A mount whose sync-point count lags behind sync_to(), like the real
+    INDI driver: sync_to() returns as soon as the coordinate is sent, and
+    ALIGNMENT_POINTSET_SIZE only reflects the new point a beat later.
+
+    Found live 2026-07-26: reading the count once straight after sync_to()
+    always saw the pre-sync value, so the loop never recognized its own
+    presync point and never deleted it.
+    """
+
+    def __init__(self, inner: MockMount, reads_before_visible: int = 2) -> None:
+        super().__init__(inner)
+        self._reads_before_visible = reads_before_visible
+        self._pending_reads = 0
+        self._count = 0
+        self.deleted_indices: list[int] = []
+
+    async def sync_to(self, coord):
+        await super().sync_to(coord)
+        self._pending_reads = self._reads_before_visible
+
+    async def get_sync_point_count(self) -> int:
+        if self._pending_reads > 0:
+            self._pending_reads -= 1
+            if self._pending_reads == 0:
+                self._count += 1
+        return self._count
+
+    async def delete_sync_point(self, index: int) -> None:
+        self.deleted_indices.append(index)
+        self._count -= 1
+
+
+async def test_presync_point_is_deleted_even_when_the_count_lags():
+    """Regression for the live 2026-07-26 failure: the loop must wait for
+    the mount to publish the new sync-point count instead of reading it
+    once, or it leaves a presync point behind on every iteration."""
+    world = make_world()
+    mount = _LaggingSyncPointMount(MockMount(world))
+    cedar = MockCedar(world)
+    config = LoopConfigCore(
+        tolerance_arcmin=1.0, max_iterations=3, settle_s=0.01, sync_point_poll_interval_s=0.001,
+    )
+    loop = ClosedLoopSlew(mount, cedar, config, SolveAcceptance())
+
+    statuses = [s async for s in loop.run(TARGET)]
+
+    presyncs = [s for s in statuses if s.state is LoopState.PRESYNC]
+    assert len(presyncs) >= 1
+    # One delete per presync, each removing the point that presync added.
+    assert len(mount.deleted_indices) == mount.sync_calls
+    assert mount.deleted_indices == [0] * mount.sync_calls
+    assert await mount.get_sync_point_count() == 0, "presync points must not accumulate"
+
+
+async def test_presync_tolerates_a_sync_that_records_no_point():
+    """The real driver silently declines to record a point while parked
+    ("Sync ... in park position") -- there is then nothing to delete, and
+    the loop must carry on rather than deleting some other point."""
+    world = make_world()
+    mount = _LaggingSyncPointMount(MockMount(world), reads_before_visible=10_000)
+    cedar = MockCedar(world)
+    config = LoopConfigCore(
+        tolerance_arcmin=1.0, max_iterations=3, settle_s=0.01,
+        sync_point_confirm_timeout_s=0.05, sync_point_poll_interval_s=0.001,
+    )
+    loop = ClosedLoopSlew(mount, cedar, config, SolveAcceptance())
+
+    statuses = [s async for s in loop.run(TARGET)]
+
+    assert statuses[-1].state is LoopState.CONVERGED, [s.state for s in statuses]
+    assert mount.deleted_indices == []
+
+
 def make_world(seed: int = 1) -> World:
     import random
 

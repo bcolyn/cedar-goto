@@ -45,6 +45,11 @@ class LoopConfigCore:
     mount_slewing_poll_interval_s: float = 0.25
     mount_slewing_timeout_s: float = 120.0
     solve_wait_timeout_s: float = 15.0
+    sync_point_confirm_timeout_s: float = 3.0
+    """How long to keep polling for the mount to publish a sync-point count
+    above the pre-sync baseline before concluding no point was recorded.
+    Measured live 2026-07-26 against the real driver: ~0.1s."""
+    sync_point_poll_interval_s: float = 0.1
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,8 +138,10 @@ class ClosedLoopSlew:
                     if presync_solve is not None and presync_solve.is_plate_solve:
                         baseline_count = await get_sync_point_count()
                         await self._mount.sync_to(presync_solve.sky_coord)
-                        new_count = await get_sync_point_count()
-                        if new_count > baseline_count:
+                        new_count = await self._await_sync_point_added(
+                            get_sync_point_count, baseline_count
+                        )
+                        if new_count is not None:
                             our_sync_point_index = new_count - 1
 
                 self._check_abort()
@@ -204,6 +211,35 @@ class ClosedLoopSlew:
         finally:
             if restore_after_correction is not None:
                 await restore_after_correction()
+
+    async def _await_sync_point_added(self, get_sync_point_count, baseline_count: int) -> int | None:
+        """Poll until the mount publishes a sync-point count above
+        `baseline_count`, and return it. None means no point was recorded.
+
+        Reading the count once, immediately after sync_to(), is not enough:
+        sync_to() returns as soon as the coordinate has been sent, and the
+        driver publishes the updated ALIGNMENT_POINTSET_SIZE about 0.1s
+        later (measured live 2026-07-26). That single read therefore saw
+        the pre-sync value *every* time, the loop concluded it had added
+        nothing, and it skipped deleting its own presync point on every
+        iteration -- so the points accumulated across a run, which is
+        precisely what destabilizes this mount's pointing model (the
+        failure b839170's delete was added to prevent). Same class of race
+        as IndiConnection.wait_for_switch_confirmed().
+
+        Returning None is a real outcome, not just a timeout: this driver
+        silently declines to record a point while parked (confirmed live,
+        "Sync ... in park position"), and there is then nothing to delete.
+        """
+        deadline = time.monotonic() + self._config.sync_point_confirm_timeout_s
+        while True:
+            count = await get_sync_point_count()
+            if count > baseline_count:
+                return count
+            if time.monotonic() > deadline:
+                return None
+            self._check_abort()
+            await asyncio.sleep(self._config.sync_point_poll_interval_s)
 
     async def _wait_for_settle(self) -> None:
         deadline = time.monotonic() + self._config.mount_slewing_timeout_s

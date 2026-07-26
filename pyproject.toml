@@ -52,3 +52,9 @@ requires-dist = []
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    # Live-hardware tests. Skipped unless their own env var is set (see
+    # tests/test_live_indi_correction.py), so a plain `pytest` never moves a
+    # real telescope -- the marker is just for selecting/deselecting them.
+    "integration: needs a real INDI server and moves the mount",
+]

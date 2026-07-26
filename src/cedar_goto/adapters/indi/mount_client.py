@@ -24,6 +24,9 @@ _ALIGNMENT_POINTSET_SIZE = "ALIGNMENT_POINTSET_SIZE"
 _ALIGNMENT_POINTSET_ACTION = "ALIGNMENT_POINTSET_ACTION"
 _ALIGNMENT_POINTSET_COMMIT = "ALIGNMENT_POINTSET_COMMIT"
 _ALIGNMENT_POINTSET_CURRENT_ENTRY = "ALIGNMENT_POINTSET_CURRENT_ENTRY"
+_ALIGNMENT_POINT_MANDATORY_NUMBERS = "ALIGNMENT_POINT_MANDATORY_NUMBERS"
+_ALIGNMENT_POINT_ENTRY_RA = "ALIGNMENT_POINT_ENTRY_RA"
+_ALIGNMENT_POINT_ENTRY_DEC = "ALIGNMENT_POINT_ENTRY_DEC"
 _CORRECTION_SLEW_RATE = "1x"
 """TELESCOPE_SLEW_RATE elements are 1x..9x plus SLEW_MAX, labeled
 0.5x/1x/2x/4x/8x/16x/32x/64x/128x sidereal respectively (confirmed live
@@ -133,6 +136,40 @@ class IndiMountClient(MountControl):
         await self._conn.set_switch(_ALIGNMENT_POINTSET_ACTION, "DELETE")
         await self._conn.wait_for_switch_confirmed(_ALIGNMENT_POINTSET_ACTION, "DELETE")
         await self._conn.set_switch(_ALIGNMENT_POINTSET_COMMIT, _ALIGNMENT_POINTSET_COMMIT)
+
+    async def read_sync_point(self, index: int) -> CelestialCoord:
+        """Read the alignment/sync point at `index` (0-based) back out of the
+        driver's database, in the mount's own epoch (JNow), like
+        get_position(). Select the entry via ALIGNMENT_POINTSET_CURRENT_ENTRY,
+        then the same select-action-then-commit protocol as
+        delete_sync_point() with READ instead of DELETE, after which
+        ALIGNMENT_POINT_MANDATORY_NUMBERS holds that entry (RA in hours, Dec
+        in degrees, alongside the direction vector this ignores).
+
+        Confirmed live 2026-07-26: a point synced at RA 16.41768h Dec
+        38.99705 read back identical to five decimals. Not used by the
+        closed loop -- it exists so a caller can verify *which* points are
+        in the database, not merely how many (tests/test_live_indi_
+        correction.py), which is the gap a bare ALIGNMENT_POINTSET_SIZE
+        check leaves open.
+        """
+        await self._conn.set_numbers(_ALIGNMENT_POINTSET_CURRENT_ENTRY, {_ALIGNMENT_POINTSET_CURRENT_ENTRY: index})
+        await asyncio.sleep(0.3)  # let the entry pointer settle, as in delete_sync_point()
+        await self._conn.set_switch(_ALIGNMENT_POINTSET_ACTION, "READ")
+        await self._conn.wait_for_switch_confirmed(_ALIGNMENT_POINTSET_ACTION, "READ")
+        await self._conn.set_switch(_ALIGNMENT_POINTSET_COMMIT, _ALIGNMENT_POINTSET_COMMIT)
+        # The driver publishes the entry a beat after the commit, and unlike
+        # ALIGNMENT_POINTSET_SIZE there's no counter to poll for a change --
+        # the previous read's values simply sit there until replaced. 0.5s
+        # is what was confirmed live; callers reading several points should
+        # compare the set they get back rather than trusting each in turn.
+        await asyncio.sleep(0.5)
+        values = await self._conn.get_numbers(_ALIGNMENT_POINT_MANDATORY_NUMBERS)
+        return CelestialCoord(
+            ra_deg=values[_ALIGNMENT_POINT_ENTRY_RA] * 15.0,
+            dec_deg=values[_ALIGNMENT_POINT_ENTRY_DEC],
+            epoch=await self.get_equatorial_system(),
+        )
 
     async def nudge_to(self, target: CelestialCoord) -> None:
         """Not part of the MountControl Protocol -- ClosedLoopSlew.run()
