@@ -30,13 +30,27 @@ _ALIGNMENT_POINTSET_CURRENT_ENTRY = "ALIGNMENT_POINTSET_CURRENT_ENTRY"
 _ALIGNMENT_POINT_MANDATORY_NUMBERS = "ALIGNMENT_POINT_MANDATORY_NUMBERS"
 _ALIGNMENT_POINT_ENTRY_RA = "ALIGNMENT_POINT_ENTRY_RA"
 _ALIGNMENT_POINT_ENTRY_DEC = "ALIGNMENT_POINT_ENTRY_DEC"
-_CORRECTION_SLEW_RATE = "1x"
-"""TELESCOPE_SLEW_RATE elements are 1x..9x plus SLEW_MAX, labeled
-0.5x/1x/2x/4x/8x/16x/32x/64x/128x sidereal respectively (confirmed live
-2026-07-25). '1x' (0.5x sidereal, the slowest preset) is confirmed live
-by eye -- pushing the gamepad's jog stick to the edge at this rate is slow
-enough to center a star by hand. This is used only for the duration of a
-closed-loop correction (see
+_CORRECTION_SLEW_RATE = "4x"
+"""TELESCOPE_SLEW_RATE element to use while correcting.
+
+Element names now mirror their labels: 0.5x, 1x, 2x, 4x, 8x, 16x, 32x, 64x,
+128x, 256x, SLEW_MAX.
+
+History, because this constant broke twice: it was originally written against
+*positional* names (1x..9x), where "1x" meant the first element -- i.e. the
+0.5x multiplier, the slowest preset. The driver was later reworked so names
+mirror labels, which silently repointed "1x" at a different preset, and a
+further change made SlewSpeeds a double so std::to_string() rendered every
+name with six decimals ("1.000000x") -- at which point no name matched at all
+and every closed-loop correction threw IndiConnectionError on entry. Fixed in
+the indi fork by formatting with %g.
+
+4x, not 1x: the genuine 1x preset was judged unbearably slow for corrections in
+the field (2026-07-28). If bursts start overshooting, revisit
+_NUDGE_ASSUMED_MAX_RATE_ARCSEC_S below -- it scales burst duration and was
+picked against the old, much slower rate.
+
+Applied only for the duration of a correction (see
 IndiMountClient.prepare_for_correction/restore_after_correction), not a
 permanent change."""
 
