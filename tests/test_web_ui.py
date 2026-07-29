@@ -156,14 +156,6 @@ async def test_sync_now_action():
         assert "RA" in body["message"]
 
 
-async def test_realign_action():
-    world = World()
-    async with make_client(world) as client:
-        resp = await client.post("/api/ui/actions/realign")
-        body = resp.json()
-        assert body["ok"] is True
-
-
 async def test_log_action_returns_lines():
     world = World()
     async with make_client(world) as client:

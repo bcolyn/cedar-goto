@@ -87,16 +87,6 @@ async def test_abort_notifies_cedar_the_slew_stopped():
         assert backend._cedar.slew_stopped_count == 1
 
 
-async def test_realign_cedar_calls_capture_boresight():
-    world = World(error_model=HarmonicErrorModel())
-    backend = make_backend(world)
-    assert backend._cedar.capture_boresight_count == 0
-
-    await backend.realign_cedar()
-
-    assert backend._cedar.capture_boresight_count == 1
-
-
 async def test_sync_to_target_notifies_cedar_the_slew_stopped():
     world = World(error_model=HarmonicErrorModel())
     backend = make_backend(world)

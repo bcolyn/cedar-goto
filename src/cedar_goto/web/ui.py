@@ -36,6 +36,7 @@ _SITE_LONGITUDE_MEMBER = ALL_MEMBERS_BY_ACTION["sitelongitude"]
 _SITE_ELEVATION_MEMBER = ALL_MEMBERS_BY_ACTION["siteelevation"]
 _UTC_DATE_MEMBER = ALL_MEMBERS_BY_ACTION["utcdate"]
 _AT_PARK_MEMBER = ALL_MEMBERS_BY_ACTION["atpark"]
+_TRACKING_MEMBER = ALL_MEMBERS_BY_ACTION["tracking"]
 _PARK_MEMBER = ALL_MEMBERS_BY_ACTION["park"]
 _UNPARK_MEMBER = ALL_MEMBERS_BY_ACTION["unpark"]
 
@@ -114,6 +115,7 @@ async def _mount_info(backend) -> dict | None:
             "utc_date": await backend.get(_UTC_DATE_MEMBER),
             "sync_point_count": await backend.get_sync_point_count(),
             "at_park": await backend.get(_AT_PARK_MEMBER),
+            "tracking": await backend.get(_TRACKING_MEMBER),
         }
     except Exception:
         return None
@@ -234,12 +236,6 @@ async def action_sync_now(request: Request) -> JSONResponse:
     )
 
 
-@router.post("/api/ui/actions/realign")
-async def action_realign(request: Request) -> JSONResponse:
-    await request.app.state.telescope_backend.realign_cedar()
-    return JSONResponse({"ok": True, "message": "told cedar-server to realign"})
-
-
 @router.post("/api/ui/actions/cedar-start")
 async def action_cedar_start(request: Request) -> JSONResponse:
     if not getattr(request.app.state, "cedar_same_host", False):
@@ -312,6 +308,8 @@ _PAGE = """<!doctype html>
   .badge.not-parked { background: #444; }
   .badge.connected { background: #1a5c34; }
   .badge.disconnected { background: #5c1a1a; }
+  .badge.tracking { background: #1a5c34; }
+  .badge.not-tracking { background: #444; }
   .button-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.6rem; margin-bottom: 0.6rem; }
   .button-row:last-of-type { margin-bottom: 0; }
   button, .button-row a {
@@ -352,6 +350,7 @@ _PAGE = """<!doctype html>
   <div class="row"><span>Location</span><span id="location">–</span></div>
   <div class="row"><span>Mount UTC time</span><span id="utc-date">–</span></div>
   <div class="row"><span>Park state</span><span id="at-park" class="badge">–</span></div>
+  <div class="row"><span>Tracking</span><span id="tracking" class="badge">–</span></div>
   <div class="row"><span>Sync point count</span><span id="sync-point-count">–</span></div>
   <div class="button-row">
     <button id="park-btn" onclick="post('/api/ui/actions/park', this)">Park</button>
@@ -543,6 +542,9 @@ function renderStatus(s) {
   // don't block the user from trying.
   document.getElementById('park-btn').disabled = info ? info.at_park : false;
   document.getElementById('unpark-btn').disabled = info ? !info.at_park : false;
+  const trackingEl = document.getElementById('tracking');
+  trackingEl.textContent = info ? (info.tracking ? 'tracking' : 'not tracking') : '–';
+  trackingEl.className = 'badge' + (info ? (info.tracking ? ' tracking' : ' not-tracking') : '');
   const cedarStatusEl = document.getElementById('cedar-status');
   cedarStatusEl.textContent = s.cedar_connected ? 'Connected' : 'Disconnected';
   cedarStatusEl.className = 'badge ' + (s.cedar_connected ? 'connected' : 'disconnected');

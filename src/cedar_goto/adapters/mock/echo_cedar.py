@@ -71,6 +71,3 @@ class MountEchoCedar(SolveSource):
 
     async def notify_slew_stopped(self) -> None:
         logger.info("MountEchoCedar: not notifying cedar-server that the slew stopped (no real cedar-server here)")
-
-    async def capture_boresight(self) -> None:
-        logger.info("MountEchoCedar: not capturing boresight (no real cedar-server here)")

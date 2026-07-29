@@ -165,16 +165,6 @@ class CedarTelescopeBackend:
         await self._mount.sync_to(solve.sky_coord)
         return solve
 
-    async def realign_cedar(self) -> None:
-        """Web UI "Realign" action: tell cedar-server to update/refine its
-        boresight offset now, using whatever's currently centered in the
-        telescope's field of view (SolveSource.capture_boresight(),
-        cedar.proto ActionRequest.capture_boresight) -- the same effect as
-        pressing Realign in cedar-server's own UI. No refusal/precondition
-        checks here: cedar-server itself decides whether it's in a state to
-        act on this."""
-        await self._cedar.capture_boresight()
-
     async def sync_to_target(self) -> CelestialCoord | None:
         """Web UI "sync mount to target" action: the user has manually
         centered the last commanded target in the main scope and confirms

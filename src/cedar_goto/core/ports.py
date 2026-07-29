@@ -64,13 +64,3 @@ class SolveSource(Protocol):
         ActionRequest.stop_slew), clearing any push-to guidance it was
         showing. Same no-raise contract as notify_slew_started()."""
         ...
-
-    async def capture_boresight(self) -> None:
-        """Web UI "Realign" action: tell cedar-server to update/refine its
-        boresight offset now, using the target currently centered in the
-        telescope's field of view (cedar.proto ActionRequest.
-        capture_boresight) -- the same effect as pressing Realign in
-        cedar-server's own UI (e.g. Cedar Aim). Per cedar.proto, meant for
-        use during an active slew to target. Same no-raise contract as
-        notify_slew_started()."""
-        ...

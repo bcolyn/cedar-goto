@@ -57,6 +57,3 @@ class EpochNormalizingSolveSource(SolveSource):
 
     async def notify_slew_stopped(self) -> None:
         await self._inner.notify_slew_stopped()
-
-    async def capture_boresight(self) -> None:
-        await self._inner.capture_boresight()

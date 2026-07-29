@@ -17,7 +17,6 @@ class MockCedar(SolveSource):
         self._solve_interval_s = solve_interval_s
         self.slew_started_calls: list[CelestialCoord] = []
         self.slew_stopped_count = 0
-        self.capture_boresight_count = 0
 
     def _make_solve(self) -> SolveResult:
         if self._world.solve_failure_countdown > 0:
@@ -61,6 +60,3 @@ class MockCedar(SolveSource):
 
     async def notify_slew_stopped(self) -> None:
         self.slew_stopped_count += 1
-
-    async def capture_boresight(self) -> None:
-        self.capture_boresight_count += 1
