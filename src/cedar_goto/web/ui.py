@@ -509,9 +509,7 @@ renderWizard();
 if (__CEDAR_SAME_HOST__) {
   document.getElementById('cedar-service-row').style.display = '';
 }
-const es = new EventSource('/api/ui/events');
-es.onmessage = (e) => {
-  const s = JSON.parse(e.data);
+function renderStatus(s) {
   document.getElementById('connected').textContent = s.connected ? 'yes' : 'no';
   document.getElementById('target').textContent = s.last_target
     ? formatHMS(s.last_target.ra_deg) + ' ' + formatDMS(s.last_target.dec_deg)
@@ -542,7 +540,27 @@ es.onmessage = (e) => {
   const cedarStatusEl = document.getElementById('cedar-status');
   cedarStatusEl.textContent = s.cedar_connected ? 'Connected' : 'Disconnected';
   cedarStatusEl.className = 'badge ' + (s.cedar_connected ? 'connected' : 'disconnected');
-};
+}
+let es = null;
+function connectEvents() {
+  if (es) es.close();
+  es = new EventSource('/api/ui/events');
+  es.onmessage = (e) => renderStatus(JSON.parse(e.data));
+}
+connectEvents();
+// A phone locking its screen or backgrounding this tab can have its socket
+// silently killed by the OS/Wi-Fi radio with no clean close -- EventSource
+// then sits believing it's still connected while nothing arrives, and only
+// F5 forced a new socket (same class of silent-drop as the SkySafari
+// Wi-Fi DTIM issue -- see cedar_backend.py's _cached_cedar_position).
+// Tearing down and reconnecting on every return to the tab, plus one
+// immediate manual fetch so the display doesn't wait out a stale
+// connection's retry backoff, fixes the "doesn't update without F5" reports.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  connectEvents();
+  fetch('/api/ui/status').then((r) => r.json()).then(renderStatus).catch(() => {});
+});
 function formatHMS(raDeg) {
   const totalHours = raDeg / 15;
   const h = Math.floor(totalHours);

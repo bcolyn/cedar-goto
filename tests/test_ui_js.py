@@ -34,8 +34,12 @@ function makeEl() {
 var document = {
   getElementById: function(id) { return makeEl(); },
   createElement: function(tag) { return makeEl(); },
+  addEventListener: function() {},
+  visibilityState: 'visible',
 };
 var EventSource = function(url) { this.url = url; this.onmessage = null; };
+EventSource.prototype.close = function() {};
+var fetch = function() { return Promise.resolve({ json: function() { return Promise.resolve({}); } }); };
 """
 
 
@@ -60,3 +64,5 @@ def test_page_script_is_valid_javascript_and_defines_the_wizard_handlers():
     assert ctx.eval("typeof post") == "function"
     assert ctx.eval("typeof formatAge") == "function"
     assert ctx.eval("typeof refreshLog") == "function"
+    assert ctx.eval("typeof renderStatus") == "function"
+    assert ctx.eval("typeof connectEvents") == "function"
