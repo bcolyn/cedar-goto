@@ -297,9 +297,11 @@ _PAGE = """<!doctype html>
   .wizard-list li { margin-bottom: 0.5rem; line-height: 1.35; }
   .row { display: flex; justify-content: space-between; align-items: center; padding: 0.45rem 0; border-bottom: 1px solid #333; font-size: 1rem; }
   .row:last-child { border-bottom: none; }
-  .park-badge { font-weight: bold; padding: 0.1rem 0.6rem; border-radius: 4px; }
-  .park-badge.parked { background: #7a4a12; }
-  .park-badge.not-parked { background: #444; }
+  .badge { font-weight: bold; padding: 0.1rem 0.6rem; border-radius: 4px; }
+  .badge.parked { background: #7a4a12; }
+  .badge.not-parked { background: #444; }
+  .badge.connected { background: #1a5c34; }
+  .badge.disconnected { background: #5c1a1a; }
   .button-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.6rem; margin-bottom: 0.6rem; }
   .button-row:last-of-type { margin-bottom: 0; }
   button, .button-row a {
@@ -339,7 +341,7 @@ _PAGE = """<!doctype html>
   <summary>Mount</summary>
   <div class="row"><span>Location</span><span id="location">–</span></div>
   <div class="row"><span>Mount UTC time</span><span id="utc-date">–</span></div>
-  <div class="row"><span>Park state</span><span id="at-park" class="park-badge">–</span></div>
+  <div class="row"><span>Park state</span><span id="at-park" class="badge">–</span></div>
   <div class="row"><span>Sync point count</span><span id="sync-point-count">–</span></div>
   <div class="button-row">
     <button id="park-btn" onclick="post('/api/ui/actions/park', this)">Park</button>
@@ -362,6 +364,7 @@ _PAGE = """<!doctype html>
 </details>
 <details class="card" open>
   <summary>Cedar</summary>
+  <div class="row"><span>Status</span><span id="cedar-status" class="badge">–</span></div>
   <div class="row"><span>Last solve</span><span id="solve">–</span></div>
   <div class="row"><span>Received</span><span id="solve-age">–</span></div>
   <div class="row"><span>Error (alt/az)</span><span id="cedar-error">–</span></div>
@@ -527,11 +530,14 @@ es.onmessage = (e) => {
     : (info ? 'not supported' : '–');
   const atParkEl = document.getElementById('at-park');
   atParkEl.textContent = info ? (info.at_park ? 'PARKED' : 'not parked') : '–';
-  atParkEl.className = 'park-badge' + (info ? (info.at_park ? ' parked' : ' not-parked') : '');
+  atParkEl.className = 'badge' + (info ? (info.at_park ? ' parked' : ' not-parked') : '');
   // Unknown state (info === null) leaves both enabled -- can't be sure, so
   // don't block the user from trying.
   document.getElementById('park-btn').disabled = info ? info.at_park : false;
   document.getElementById('unpark-btn').disabled = info ? !info.at_park : false;
+  const cedarStatusEl = document.getElementById('cedar-status');
+  cedarStatusEl.textContent = s.cedar_connected ? 'Connected' : 'Disconnected';
+  cedarStatusEl.className = 'badge ' + (s.cedar_connected ? 'connected' : 'disconnected');
 };
 function formatHMS(raDeg) {
   const totalHours = raDeg / 15;

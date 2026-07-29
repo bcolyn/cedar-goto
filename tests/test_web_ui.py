@@ -126,6 +126,7 @@ async def test_status_reflects_connected_and_solve():
         # MockCedar always has a live solve ready -- reflects cedar's
         # current state, not a cached result from any prior action.
         assert idle["last_solve"] is not None
+        assert idle["cedar_connected"] is True
 
         await client.put("/api/v1/telescope/0/connected", data={"Connected": "true"})
         await client.put(

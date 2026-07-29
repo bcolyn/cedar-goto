@@ -205,6 +205,32 @@ async def test_status_snapshot_reflects_cedars_live_solve():
     assert after["last_target_time_unix"] is not None
 
 
+async def test_status_snapshot_reports_cedar_connected_true_when_reachable():
+    world = World(error_model=HarmonicErrorModel())
+    backend = make_backend(world)
+    snapshot = await backend.status_snapshot()
+    assert snapshot["cedar_connected"] is True
+
+
+async def test_status_snapshot_reports_cedar_connected_false_when_unreachable():
+    class UnreachableCedar:
+        async def get_latest_solve(self):
+            raise RuntimeError("simulated cedar-server outage")
+
+        def stream_solves(self):
+            raise NotImplementedError
+
+    world = World(error_model=HarmonicErrorModel())
+    inner = MockTelescopeBackend(world)
+    mount = MockMount(world)
+    backend = CedarTelescopeBackend(
+        inner, mount, UnreachableCedar(), SolveAcceptance(), PositionSourceConfig(source="mount")
+    )
+    snapshot = await backend.status_snapshot()
+    assert snapshot["cedar_connected"] is False
+    assert snapshot["last_solve"] is None
+
+
 async def test_sync_to_cedar_refuses_a_non_plate_solve():
     """MountEchoCedar-like loopback solves (SolveResult.is_plate_solve=False)
     must never reach mount.sync_to() via the "Sync now" action either --

@@ -203,16 +203,24 @@ class CedarTelescopeBackend:
         """Web UI dashboard status (web/ui.py): last commanded target and
         cedar's current solve, queried live on every call -- there's no
         background task tracking this anymore, so "last solve" reflects
-        whatever cedar reports right now, not a cached evaluation."""
+        whatever cedar reports right now, not a cached evaluation.
+
+        cedar_connected reflects whether *this* call to get_latest_solve()
+        succeeded, not a cached/background health check -- mirrors the same
+        try/except _cedar_position() already does, just also surfaced to
+        the dashboard's Cedar card instead of only driving the position
+        fallback."""
         result: dict = {
             "last_target": _coord_dict(self._last_target) if self._last_target else None,
             "last_target_time_unix": self._last_target_time_unix,
         }
         try:
             solve = await self._cedar.get_latest_solve()
+            result["cedar_connected"] = True
         except Exception as exc:
             logger.warning("cedar solve source unavailable (%r) while building status snapshot", exc)
             solve = None
+            result["cedar_connected"] = False
         result["last_solve"] = _solve_dict(solve) if solve is not None else None
         return result
 
