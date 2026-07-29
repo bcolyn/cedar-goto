@@ -28,6 +28,13 @@ from cedar_goto.core.solve import SolveResult
 
 logger = logging.getLogger(__name__)
 
+# Deadline for the non_blocking GetFrame behind get_latest_solve(). Generous
+# against the 75 ms a healthy cedar-server takes (measured on the Pi
+# 2026-07-29) -- this exists to bound a wedged channel, not to police normal
+# latency, so it must not trip on a merely busy server. cedar-server shares
+# this Pi with the plate solver and runs thermally capped at 1.2 GHz.
+_LATEST_SOLVE_TIMEOUT_S = 2.0
+
 
 def _solve_epoch(ps: cedar_common_pb2.PlateSolution, coord: cedar_common_pb2.CelestialCoord) -> float:
     """SolveSource must emit J2000 (epoch-seam decision, 2026-07-26), but
@@ -157,9 +164,53 @@ class CedarGrpcClient(SolveSource):
             await channel.close()
 
     async def get_latest_solve(self) -> SolveResult | None:
+        """Latest solve, or None if cedar hasn't produced one.
+
+        Bounded by _LATEST_SOLVE_TIMEOUT_S, and the timeout is load-bearing
+        rather than belt-and-braces. This is a non_blocking GetFrame, so
+        cedar-server answers it immediately when healthy -- 75 ms median,
+        measured on the Pi 2026-07-29. But it goes over the *shared*
+        long-lived channel, and stream_solves()'s docstring above records
+        that this channel wedges in practice when a cancelled call's
+        cleanup doesn't complete. Without a deadline, a wedged channel
+        turned every position read into an indefinite await: Alpaca requests
+        piled up and never returned, so cedar-goto went "not responding" for
+        minutes at a time and then recovered on its own once gRPC's
+        reconnect backoff cleared it -- while SSH and everything else on the
+        same host were unaffected, which is what made it look like a network
+        fault for days.
+
+        CedarTelescopeBackend._cedar_position() already promises to fall
+        back to the mount's own position on "cedar-server unreachable", but
+        that except-clause could never fire, because a hang is not an
+        exception. A deadline is what turns the wedge into the outage case
+        the caller already handles.
+
+        The channel is rebuilt on timeout: per that same docstring a wedged
+        channel stays wedged, so without this every later call would burn
+        the full deadline before falling back.
+        """
         request = cedar_pb2.FrameRequest(non_blocking=True)
-        frame = await self._stub.GetFrame(request)
+        try:
+            frame = await self._stub.GetFrame(request, timeout=_LATEST_SOLVE_TIMEOUT_S)
+        except grpc.aio.AioRpcError:
+            await self._reset_channel()
+            raise
         return _to_solve_result(frame)
+
+    async def _reset_channel(self) -> None:
+        """Discard a wedged channel and open a fresh one, mirroring what
+        stream_solves() achieves with a per-call channel. Closing is
+        best-effort: a channel wedged badly enough to need replacing is
+        exactly one whose close() may not complete either, and failing here
+        would mask the original error the caller is about to see."""
+        old = self._channel
+        self._channel = grpc.aio.insecure_channel(self._address)
+        self._stub = cedar_pb2_grpc.CedarStub(self._channel)
+        try:
+            await old.close()
+        except Exception:
+            logger.debug("discarding wedged cedar channel failed to close cleanly", exc_info=True)
 
     async def notify_slew_started(self, target: CelestialCoord) -> None:
         """Lets cedar-server offer push-to guidance (SlewRequest fields in
