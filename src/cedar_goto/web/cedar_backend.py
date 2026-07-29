@@ -63,6 +63,16 @@ class CedarTelescopeBackend:
         self._position_cache: tuple[float, float] | None = None
         self._position_cached: bool = False
         self._position_cache_at: float = 0.0
+        self._cedar_stopped_by_us: bool = False
+
+    def set_cedar_stopped_by_us(self, stopped: bool) -> None:
+        """Called by the web UI's cedar-start/cedar-stop action routes
+        (web/ui.py) after a successful `cedar_systemctl()` call, so that an
+        intentional stop doesn't flood the log with "cedar solve source
+        unavailable" warnings on every position poll for however long the
+        user leaves it stopped -- those warnings are only useful for a
+        *surprise* outage."""
+        self._cedar_stopped_by_us = stopped
 
     async def get(self, member: Member):
         if member.name in ("RightAscension", "Declination") and self._position_config.source != "mount":
@@ -218,7 +228,8 @@ class CedarTelescopeBackend:
             solve = await self._cedar.get_latest_solve()
             result["cedar_connected"] = True
         except Exception as exc:
-            logger.warning("cedar solve source unavailable (%r) while building status snapshot", exc)
+            if not self._cedar_stopped_by_us:
+                logger.warning("cedar solve source unavailable (%r) while building status snapshot", exc)
             solve = None
             result["cedar_connected"] = False
         result["last_solve"] = _solve_dict(solve) if solve is not None else None
@@ -277,7 +288,8 @@ class CedarTelescopeBackend:
         try:
             solve = await self._cedar.get_latest_solve()
         except Exception as exc:
-            logger.warning("cedar solve source unavailable (%r), falling back to mount position", exc)
+            if not self._cedar_stopped_by_us:
+                logger.warning("cedar solve source unavailable (%r), falling back to mount position", exc)
             return None
         if solve is None:
             return None

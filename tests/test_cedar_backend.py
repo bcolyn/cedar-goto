@@ -231,6 +231,38 @@ async def test_status_snapshot_reports_cedar_connected_false_when_unreachable():
     assert snapshot["last_solve"] is None
 
 
+async def test_set_cedar_stopped_by_us_silences_the_unavailable_warning(caplog):
+    """web/ui.py's cedar-stop action route calls this after a successful
+    `sudo systemctl stop cedar`, so an intentional stop doesn't flood the
+    log with "cedar solve source unavailable" on every position poll for
+    however long the user leaves it stopped."""
+
+    class UnreachableCedar:
+        async def get_latest_solve(self):
+            raise RuntimeError("simulated cedar-server outage")
+
+        def stream_solves(self):
+            raise NotImplementedError
+
+    world = World(error_model=HarmonicErrorModel())
+    inner = MockTelescopeBackend(world)
+    mount = MockMount(world)
+    backend = CedarTelescopeBackend(
+        inner, mount, UnreachableCedar(), SolveAcceptance(), PositionSourceConfig(source="mount")
+    )
+
+    backend.set_cedar_stopped_by_us(True)
+    with caplog.at_level("WARNING"):
+        snapshot = await backend.status_snapshot()
+    assert snapshot["cedar_connected"] is False
+    assert not caplog.records
+
+    backend.set_cedar_stopped_by_us(False)
+    with caplog.at_level("WARNING"):
+        await backend.status_snapshot()
+    assert any("cedar solve source unavailable" in r.message for r in caplog.records)
+
+
 async def test_sync_to_cedar_refuses_a_non_plate_solve():
     """MountEchoCedar-like loopback solves (SolveResult.is_plate_solve=False)
     must never reach mount.sync_to() via the "Sync now" action either --

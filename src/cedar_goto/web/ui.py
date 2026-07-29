@@ -239,6 +239,8 @@ async def action_cedar_start(request: Request) -> JSONResponse:
     if not getattr(request.app.state, "cedar_same_host", False):
         return JSONResponse({"ok": False, "message": "cedar-server is not on this host"})
     ok, message = await cedar_systemctl("start")
+    if ok:
+        request.app.state.telescope_backend.set_cedar_stopped_by_us(False)
     return JSONResponse({"ok": ok, "message": message})
 
 
@@ -247,6 +249,8 @@ async def action_cedar_stop(request: Request) -> JSONResponse:
     if not getattr(request.app.state, "cedar_same_host", False):
         return JSONResponse({"ok": False, "message": "cedar-server is not on this host"})
     ok, message = await cedar_systemctl("stop")
+    if ok:
+        request.app.state.telescope_backend.set_cedar_stopped_by_us(True)
     return JSONResponse({"ok": ok, "message": message})
 
 
