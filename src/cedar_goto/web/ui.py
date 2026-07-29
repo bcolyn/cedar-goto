@@ -196,10 +196,16 @@ async def action_clear_sync_points(request: Request) -> JSONResponse:
 
 @router.post("/api/ui/actions/park")
 async def action_park(request: Request) -> JSONResponse:
+    # Park is fire-and-forget over INDI (IndiTelescopeBackend just flips
+    # TELESCOPE_PARK.PARK and returns -- the mount is still physically
+    # slewing to the park position when this responds), so the message
+    # must not claim it's already done: the At Park badge (driven by
+    # AtPark, which does reflect the driver's real, live state) is what
+    # actually tells the user when it's finished.
     backend = request.app.state.telescope_backend
     try:
         await backend.put(_PARK_MEMBER, {})
-        return JSONResponse({"ok": True, "message": "parked"})
+        return JSONResponse({"ok": True, "message": "parking commanded"})
     except AlpacaError as exc:
         return JSONResponse({"ok": False, "message": exc.message})
 
@@ -209,7 +215,7 @@ async def action_unpark(request: Request) -> JSONResponse:
     backend = request.app.state.telescope_backend
     try:
         await backend.put(_UNPARK_MEMBER, {})
-        return JSONResponse({"ok": True, "message": "unparked"})
+        return JSONResponse({"ok": True, "message": "unparking commanded"})
     except AlpacaError as exc:
         return JSONResponse({"ok": False, "message": exc.message})
 
@@ -602,6 +608,11 @@ async function post(url, btn) {
     document.getElementById('message').textContent = body.message || (body.ok ? 'OK' : 'failed');
   } finally {
     if (btn) btn.disabled = false;
+    // Actions like park and cedar-start only *command* something that
+    // finishes later (physical park motion, cedar-server booting up) --
+    // fetch the live status right away instead of leaving whatever the
+    // last SSE tick (up to 0.5s old) painted on screen.
+    fetch('/api/ui/status').then((resp) => resp.json()).then(renderStatus).catch(() => {});
   }
 }
 function clearSyncPoints(btn) {
