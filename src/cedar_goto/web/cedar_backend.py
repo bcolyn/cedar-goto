@@ -25,6 +25,16 @@ logger = logging.getLogger(__name__)
 _SLEW_MEMBERS = frozenset({"SlewToCoordinates", "SlewToCoordinatesAsync"})
 _AT_PARK_MEMBER = ALL_MEMBERS_BY_ACTION["atpark"]
 
+# How long a fetched cedar position is reused for reported RightAscension/
+# Declination -- see _cached_cedar_position(). Matched to cedar's own ~1 Hz
+# solve cadence: a shorter TTL cannot return fresher data, it just re-fetches
+# the same solve at 75 ms a time. First tried at 0.2 s, which was too short to
+# help a real client -- an ASCOM client polling every few hundred ms missed
+# the window on every refresh, and only the RA/Dec pair read milliseconds
+# apart ever hit. Only the *reported* position is cached; sync_to_cedar() and
+# the slew paths call get_latest_solve() directly and are unaffected.
+_POSITION_CACHE_TTL_S = 1.0
+
 
 class SyncRefused(Exception):
     """Raised by sync_to_cedar() when refusing for a reason more specific
@@ -50,10 +60,13 @@ class CedarTelescopeBackend:
         self._position_config = position_config
         self._last_target: CelestialCoord | None = None
         self._last_target_time_unix: float | None = None
+        self._position_cache: tuple[float, float] | None = None
+        self._position_cached: bool = False
+        self._position_cache_at: float = 0.0
 
     async def get(self, member: Member):
         if member.name in ("RightAscension", "Declination") and self._position_config.source != "mount":
-            position = await self._cedar_position()
+            position = await self._cached_cedar_position()
             if position is not None:
                 ra_hours, dec_deg = position
                 return ra_hours if member.name == "RightAscension" else dec_deg
@@ -202,6 +215,44 @@ class CedarTelescopeBackend:
             solve = None
         result["last_solve"] = _solve_dict(solve) if solve is not None else None
         return result
+
+    async def _cached_cedar_position(self) -> tuple[float, float] | None:
+        """_cedar_position() memoised for _POSITION_CACHE_TTL_S.
+
+        Measured on the Pi 2026-07-29: get_latest_solve() costs 75 ms median
+        (57-109 ms), and it is the *only* slow thing cedar-goto does -- every
+        other Alpaca member answers in 5-6 ms straight from the mount. An
+        ASCOM client reads RightAscension and Declination as two separate
+        requests milliseconds apart, so an uncached refresh pays it twice,
+        ~150 ms, and gets the identical solve back both times: cedar solves
+        at roughly 1 Hz, far slower than clients poll.
+
+        Why this is worth a cache rather than accepted latency: SkySafari
+        opens a fresh TCP connection per Alpaca call, and over WiFi a reply
+        that late arrives after the phone's radio has dozed, so the AP
+        buffers it to the next DTIM and retries it. That presents as
+        downlink packet loss and cost days of chasing RF causes that were
+        never there -- see cedar-total's CLAUDE.md. cedar-server answers the
+        same calls in 2 ms and was rock-solid on the identical radio; that
+        contrast is what located this.
+
+        The TTL is deliberately far shorter than cedar's solve cadence, so
+        this mostly just collapses the RA/Dec pair into one fetch rather
+        than serving genuinely old positions.
+        """
+        now = time.monotonic()
+        if self._position_cached and now - self._position_cache_at < _POSITION_CACHE_TTL_S:
+            return self._position_cache
+        position = await self._cedar_position()
+        # A None (no solve yet, or cedar unreachable) is cached too -- it
+        # costs exactly as much to discover as a real solve, and indoors
+        # with nothing to solve it is the common case. Hence the separate
+        # _position_cached flag: None is a cacheable value here, not a
+        # "nothing cached" marker.
+        self._position_cache = position
+        self._position_cached = True
+        self._position_cache_at = now
+        return position
 
     async def _cedar_position(self) -> tuple[float, float] | None:
         """DESIGN.md §3 "Reported position": cedar-preferred with mount
