@@ -119,9 +119,36 @@ async def _mount_info(backend) -> dict | None:
         return None
 
 
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1"})
+
+
+def cedar_address_is_loopback(address: str) -> bool:
+    """True if `address` ("host:port") points at loopback -- i.e. cedar-goto
+    and cedar-server run on the same box. Checks the parsed host, not a bare
+    substring match: "127.0.0.1" doesn't contain the substring "localhost",
+    which under-detected same-host deployments configured with an IP
+    instead of the name (confirmed live against the production Pi)."""
+    host, _, _ = address.partition(":")
+    return host in _LOOPBACK_HOSTS
+
+
+def _resolve_cedar_ui_url(request: Request, cedar_address: str | None) -> str | None:
+    """Builds the link to cedar-server's own UI from the raw configured
+    [cedar].address. A loopback host must be resolved against the
+    *request's* own host, not cedar-goto's -- "localhost"/"127.0.0.1" in a
+    link opened from a phone resolves on the phone, not on cedar-goto's box
+    (confirmed live: the link was dead on a same-host deployment)."""
+    if cedar_address is None:
+        return None
+    host, sep, port = cedar_address.partition(":")
+    if host in _LOOPBACK_HOSTS:
+        host = request.url.hostname
+    return f"http://{host}{sep}{port}/" if sep else f"http://{host}/"
+
+
 @router.get("/", response_class=HTMLResponse)
 async def index(request: Request) -> str:
-    cedar_ui_url = getattr(request.app.state, "cedar_ui_url", None)
+    cedar_ui_url = _resolve_cedar_ui_url(request, getattr(request.app.state, "cedar_address", None))
     cedar_same_host = getattr(request.app.state, "cedar_same_host", False)
     return (
         _PAGE.replace("__CEDAR_UI_LINK__", json.dumps(cedar_ui_url))

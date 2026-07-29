@@ -16,17 +16,34 @@ from cedar_goto.config import PositionSourceConfig
 from cedar_goto.core.solve import SolveAcceptance
 from cedar_goto.web.app import create_app
 from cedar_goto.web.cedar_backend import CedarTelescopeBackend
+from cedar_goto.web.ui import cedar_address_is_loopback
 
 BASE = "http://testserver"
 
 
+@pytest.mark.parametrize(
+    "address,expected",
+    [
+        ("localhost:80", True),
+        ("127.0.0.1:80", True),
+        ("cedar.home.colyn.be:80", False),
+        # A previous version substring-matched "localhost" -- these must
+        # NOT false-positive on a bare substring/prefix match.
+        ("127.0.0.100:80", False),
+        ("notlocalhost.example.com:80", False),
+    ],
+)
+def test_cedar_address_is_loopback(address, expected):
+    assert cedar_address_is_loopback(address) is expected
+
+
 def make_client(
-    world: World, cedar_ui_url: str | None = None, cedar_same_host: bool = False
+    world: World, cedar_address: str | None = None, cedar_same_host: bool = False
 ) -> httpx.AsyncClient:
     inner = MockTelescopeBackend(world)
     mount, cedar = MockMount(world), MockCedar(world)
     backend = CedarTelescopeBackend(inner, mount, cedar, SolveAcceptance(), PositionSourceConfig(source="mount"))
-    app = create_app(backend, cedar_ui_url=cedar_ui_url, cedar_same_host=cedar_same_host)
+    app = create_app(backend, cedar_address=cedar_address, cedar_same_host=cedar_same_host)
     return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=BASE)
 
 
@@ -45,9 +62,24 @@ async def test_index_page_has_no_cedar_link_by_default():
 
 
 async def test_index_page_embeds_the_cedar_ui_url_when_configured():
-    async with make_client(World(), cedar_ui_url="http://cedar.example.com/") as client:
+    async with make_client(World(), cedar_address="cedar.example.com:80") as client:
         resp = await client.get("/")
-        assert 'link: "http://cedar.example.com/",' in resp.text
+        assert 'link: "http://cedar.example.com:80/",' in resp.text
+
+
+async def test_index_page_resolves_a_loopback_cedar_address_against_the_request_host():
+    """A same-host deployment configures [cedar].address as "localhost:80"
+    or "127.0.0.1:80" -- the link must resolve against whatever host the
+    client actually used to reach cedar-goto (same box as cedar-server),
+    not "localhost", which would resolve on the client's own device
+    instead when opened from a phone."""
+    async with make_client(World(), cedar_address="localhost:80") as client:
+        resp = await client.get("/")
+        assert 'link: "http://testserver:80/",' in resp.text
+
+    async with make_client(World(), cedar_address="127.0.0.1:80") as client:
+        resp = await client.get("/")
+        assert 'link: "http://testserver:80/",' in resp.text
 
 
 async def test_index_page_hides_cedar_service_row_by_default():

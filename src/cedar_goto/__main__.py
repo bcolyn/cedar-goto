@@ -21,6 +21,7 @@ from cedar_goto.web.backend import TelescopeBackend
 from cedar_goto.web.cedar_backend import CedarTelescopeBackend
 from cedar_goto.web.discovery import start_discovery_responder
 from cedar_goto.web.log_buffer import install as install_log_buffer
+from cedar_goto.web.ui import cedar_address_is_loopback
 
 logger = logging.getLogger(__name__)
 
@@ -108,29 +109,34 @@ def _build_backend(config: Config) -> TelescopeBackend:
     return CedarTelescopeBackend(inner, mount, cedar, _solve_acceptance(config), config.position)
 
 
-def _cedar_ui_url(config: Config) -> str | None:
+def _cedar_address_for_link(config: Config) -> str | None:
     # cedar-server serves its own web UI on the same host:port as its gRPC
     # (README "cedar-server serves gRPC on the same port as its web UI") --
     # None for "mock"/other backends, which have no real cedar-server UI to
-    # link to.
+    # link to. Deliberately the raw "host:port" from config, not a built
+    # URL: when the host is "localhost" (a same-host deployment, same case
+    # _cedar_same_host() checks for), web/ui.py's index() must resolve it
+    # against the *request's* own host at request time, not this process's
+    # -- "localhost" in a link opened from a phone resolves on the phone,
+    # not on cedar-goto's box.
     if config.cedar.backend != "grpc":
         return None
-    return f"http://{config.cedar.address}/"
+    return config.cedar.address
 
 
 def _cedar_same_host(config: Config) -> bool:
     # Gates the web UI's Start/Stop cedar-server buttons (web/cedar_service.py)
     # -- only meaningful when there's a real cedar-server to control at all
-    # (backend == "grpc"), and only when it's reachable as "localhost", i.e.
+    # (backend == "grpc"), and only when it's reachable via loopback, i.e.
     # cedar-goto and cedar-server run on the same box, so a local `sudo
     # systemctl` call actually controls the right service.
-    return config.cedar.backend == "grpc" and "localhost" in config.cedar.address
+    return config.cedar.backend == "grpc" and cedar_address_is_loopback(config.cedar.address)
 
 
 async def _run(config: Config) -> None:
     backend = _build_backend(config)
     app = create_app(
-        backend, cedar_ui_url=_cedar_ui_url(config), cedar_same_host=_cedar_same_host(config)
+        backend, cedar_address=_cedar_address_for_link(config), cedar_same_host=_cedar_same_host(config)
     )
 
     server = uvicorn.Server(

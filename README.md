@@ -193,8 +193,8 @@ meant to be used from a phone.
   decomposed onto the mount's own Alt/Az axes (not RA/Dec) so it maps
   directly onto "how far off is each mechanical axis". Action: **Sync
   mount to cedar**. When cedar-goto detects it's running on the same host
-  as cedar-server (`[cedar].address` contains "localhost"), **Start
-  cedar-server**/**Stop cedar-server** buttons also appear here, running
+  as cedar-server (`[cedar].address`'s host is `localhost` or `127.0.0.1`),
+  **Start cedar-server**/**Stop cedar-server** buttons also appear here, running
   `sudo systemctl start/stop cedar` locally -- see "Start/stop cedar-server"
   below for the sudoers setup this needs. Hidden entirely (and refused
   server-side even if called directly) otherwise.
@@ -287,8 +287,8 @@ you chose) manually in the client instead.
 ### Start/stop cedar-server
 
 The web UI's Start/Stop cedar-server buttons (Cedar panel, only shown when
-`[cedar].address` contains "localhost") shell out to `sudo systemctl
-start/stop cedar` on the box cedar-goto itself is running on. This only
+`[cedar].address`'s host is `localhost` or `127.0.0.1`) shell out to `sudo
+systemctl start/stop cedar` on the box cedar-goto itself is running on. This only
 works if the service user (`cedar-goto` by default, see `packaging/
 cedar-goto.service`) has **passwordless sudo** for exactly those two
 commands -- `install.sh` does not set this up automatically (it's a system
