@@ -1,38 +1,28 @@
 """cedar-goto entry point.
 
-Phase 2 (DESIGN.md §5, §10): the external Alpaca Telescope proxy with the
-closed loop wired into SlewToCoordinates(Async) -- slews are corrected
-against cedar's plate-solved position, not just passed straight through.
+Facilitates using cedar-server (plate solver) with a GoTo mount: the
+external Alpaca Telescope proxy, plus the web UI actions (web/ui.py) that
+sync the mount to cedar's solve, sync to the last commanded target, or
+re-slew to it. Slews themselves proxy straight through to the mount --
+cedar-goto does not drive the mount automatically.
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
 import logging
-from pathlib import Path
 
 import uvicorn
 
-from cedar_goto.adapters.buzzer import build_buzzer
 from cedar_goto.config import Config
-from cedar_goto.core.loop import LoopConfigCore
 from cedar_goto.core.solve import SolveAcceptance
-from cedar_goto.state import PersistedState, load_state, save_state
 from cedar_goto.web.app import create_app
 from cedar_goto.web.backend import TelescopeBackend
-from cedar_goto.web.closed_loop_backend import ClosedLoopTelescopeBackend
+from cedar_goto.web.cedar_backend import CedarTelescopeBackend
 from cedar_goto.web.discovery import start_discovery_responder
+from cedar_goto.web.log_buffer import install as install_log_buffer
 
 logger = logging.getLogger(__name__)
-
-
-def _loop_config(config: Config) -> LoopConfigCore:
-    return LoopConfigCore(
-        tolerance_arcmin=config.loop.tolerance_arcmin,
-        max_correction_arcmin=config.loop.max_correction_arcmin,
-        max_iterations=config.loop.max_iterations,
-        settle_s=config.loop.settle_ms / 1000.0,
-    )
 
 
 def _solve_acceptance(config: Config) -> SolveAcceptance:
@@ -44,7 +34,7 @@ def _solve_acceptance(config: Config) -> SolveAcceptance:
     )
 
 
-def _build_backend(config: Config, state_path: Path) -> TelescopeBackend:
+def _build_backend(config: Config) -> TelescopeBackend:
     # [mount].backend and [cedar].backend are independent -- e.g. a real
     # mount against a mock solve source when cedar-server can't solve
     # (daylight, no stars).
@@ -115,27 +105,33 @@ def _build_backend(config: Config, state_path: Path) -> TelescopeBackend:
     # mock sources -- see EpochNormalizingSolveSource's docstring.
     cedar = EpochNormalizingSolveSource(cedar, mount.get_equatorial_system)
 
-    persisted = load_state(state_path, default_correction_enabled=config.loop.correction_enabled)
+    return CedarTelescopeBackend(inner, mount, cedar, _solve_acceptance(config), config.position)
 
-    def _persist_correction_enabled(enabled: bool) -> None:
-        save_state(state_path, PersistedState(correction_enabled=enabled))
 
-    return ClosedLoopTelescopeBackend(
-        inner,
-        mount,
-        cedar,
-        _loop_config(config),
-        _solve_acceptance(config),
-        config.position,
-        buzzer=build_buzzer(config.buzzer),
-        correction_enabled=persisted.correction_enabled,
-        on_correction_changed=_persist_correction_enabled,
+def _cedar_ui_url(config: Config) -> str | None:
+    # cedar-server serves its own web UI on the same host:port as its gRPC
+    # (README "cedar-server serves gRPC on the same port as its web UI") --
+    # None for "mock"/other backends, which have no real cedar-server UI to
+    # link to.
+    if config.cedar.backend != "grpc":
+        return None
+    return f"http://{config.cedar.address}/"
+
+
+def _cedar_same_host(config: Config) -> bool:
+    # Gates the web UI's Start/Stop cedar-server buttons (web/cedar_service.py)
+    # -- only meaningful when there's a real cedar-server to control at all
+    # (backend == "grpc"), and only when it's reachable as "localhost", i.e.
+    # cedar-goto and cedar-server run on the same box, so a local `sudo
+    # systemctl` call actually controls the right service.
+    return config.cedar.backend == "grpc" and "localhost" in config.cedar.address
+
+
+async def _run(config: Config) -> None:
+    backend = _build_backend(config)
+    app = create_app(
+        backend, cedar_ui_url=_cedar_ui_url(config), cedar_same_host=_cedar_same_host(config)
     )
-
-
-async def _run(config: Config, state_path: Path) -> None:
-    backend = _build_backend(config, state_path)
-    app = create_app(backend)
 
     server = uvicorn.Server(
         uvicorn.Config(app, host=config.server.bind, port=config.server.alpaca_port, log_level="info")
@@ -157,16 +153,13 @@ async def _run(config: Config, state_path: Path) -> None:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
+    install_log_buffer()
     parser = argparse.ArgumentParser(prog="cedar-goto")
     parser.add_argument("--config", default="config.toml")
     args = parser.parse_args()
 
     config = Config.load(args.config)
-    # Sibling of config.toml, not a rewrite of it (state.py) -- keeps
-    # install.sh's "config.toml is never touched by an upgrade" promise
-    # (README.md "Deployment") intact for this file too.
-    state_path = Path(args.config).with_name("state.toml")
-    asyncio.run(_run(config, state_path))
+    asyncio.run(_run(config))
 
 
 if __name__ == "__main__":

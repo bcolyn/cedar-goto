@@ -13,7 +13,7 @@ equTopocentric).
 This wraps any SolveSource and does the one conversion cedar-goto needs:
 precesses outbound solves J2000 -> working epoch, and precesses the inbound
 notify_slew_started() target working epoch -> J2000 (cedar-server's own
-convention). Everything downstream of this wrapper -- core/loop.py,
+convention). Everything downstream of this wrapper -- CedarTelescopeBackend,
 MountControl adapters -- works in a single consistent epoch and never sees
 J2000 unless the working epoch happens to be J2000.
 
@@ -57,3 +57,6 @@ class EpochNormalizingSolveSource(SolveSource):
 
     async def notify_slew_stopped(self) -> None:
         await self._inner.notify_slew_stopped()
+
+    async def capture_boresight(self) -> None:
+        await self._inner.capture_boresight()

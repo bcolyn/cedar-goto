@@ -34,14 +34,6 @@ latitude_deg = 50.719156642083021
 longitude_deg = 3.9394812552330514
 elevation_m = 0.0
 
-[loop]
-tolerance_arcmin = 1.0        # "min_move": stop nudging once measured error is under this
-# max_correction_arcmin = 30.0  # "max_move": refuse to auto-nudge above this (uncomment once tuned on-sky)
-max_iterations = 3
-settle_ms = 1500
-correction_enabled = true     # starting state of the dashboard's auto-correction toggle;
-                              # off = SlewToCoordinates is a bare proxy (no cedar nudging)
-
 [solve]
 min_matches = 10
 max_prob_false_positive = 1e-3
@@ -51,8 +43,3 @@ reject_imu = true
 [position]
 source = "cedar_fallback_mount"   # "cedar" | "mount" | "cedar_fallback_mount"
 max_solve_age_s = 5.0
-
-[buzzer]
-enabled = false
-gpio_pin = 18
-pattern = "success"

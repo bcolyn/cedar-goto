@@ -67,7 +67,7 @@ class World:
     alignment_offset_dec_deg: float = 0.0
     """Cumulative correction learned from Sync calls — models a mount's internal
     alignment model, which a real Sync recalibrates. Exercises the manual
-    "sync now"/"sync to target" web UI actions (ClosedLoopTelescopeBackend)
+    "sync now"/"sync to target" web UI actions (CedarTelescopeBackend)
     against the mock harness."""
 
     _last_commanded: CelestialCoord | None = None

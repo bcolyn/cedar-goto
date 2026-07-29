@@ -77,11 +77,11 @@ class AlpacaMountClient(MountControl):
     async def _check_epoch(self, coord: CelestialCoord) -> None:
         """Regression tripwire, not a conversion (epoch-seam decision,
         2026-07-26): this driver no longer converts epochs itself -- the
-        single conversion seam is EpochNormalizingSolveSource, upstream of
-        core/loop.py, so every coordinate reaching this class is expected to
-        already be tagged in this mount's own advertised EquatorialSystem.
-        Logs rather than raises -- a wrong tag is a correctness bug in the
-        caller, not a reason to abort an in-progress slew command."""
+        single conversion seam is EpochNormalizingSolveSource, so every
+        coordinate reaching this class is expected to already be tagged in
+        this mount's own advertised EquatorialSystem. Logs rather than
+        raises -- a wrong tag is a correctness bug in the caller, not a
+        reason to abort an in-progress slew command."""
         mount_epoch = await self.get_equatorial_system()
         if abs(coord.epoch - mount_epoch) > EPOCH_MATCH_TOLERANCE_YR:
             logger.warning(

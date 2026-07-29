@@ -14,9 +14,9 @@ particular loopback. Kept for uniformity (every SolveSource honors the same
 contract, so nothing downstream needs to special-case this one) rather than
 skipping the conversion to save what's usually a near-free precess() call.
 
-Every solve is marked is_plate_solve=False (core/solve.py) -- the loop and
-UI sync paths (core/loop.py, web/closed_loop_backend.py) refuse to
-mount.sync_to() with one of these, since syncing against the mount's own
+Every solve is marked is_plate_solve=False (core/solve.py) -- the UI sync
+path (web/cedar_backend.py's sync_to_cedar()) refuses to mount.sync_to()
+with one of these, since syncing against the mount's own
 already-possibly-wrong belief would corrupt its persistent alignment/
 sync-point database with circular, non-independent data.
 """
@@ -71,3 +71,6 @@ class MountEchoCedar(SolveSource):
 
     async def notify_slew_stopped(self) -> None:
         logger.info("MountEchoCedar: not notifying cedar-server that the slew stopped (no real cedar-server here)")
+
+    async def capture_boresight(self) -> None:
+        logger.info("MountEchoCedar: not capturing boresight (no real cedar-server here)")

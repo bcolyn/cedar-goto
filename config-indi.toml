@@ -22,13 +22,6 @@ bind = "0.0.0.0"
 alpaca_port = 11111
 discovery = true
 
-[loop]
-tolerance_arcmin = 1.0
-# max_correction_arcmin = 30.0
-max_iterations = 3
-settle_ms = 1500
-correction_enabled = true          # dashboard auto-correction toggle's starting state
-
 [solve]
 min_matches = 10
 max_prob_false_positive = 1e-3
@@ -38,6 +31,3 @@ reject_imu = true
 [position]
 source = "cedar_fallback_mount"
 max_solve_age_s = 5.0
-
-[buzzer]
-enabled = false

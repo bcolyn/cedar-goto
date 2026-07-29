@@ -191,3 +191,9 @@ class CedarGrpcClient(SolveSource):
             await self._stub.InitiateAction(cedar_pb2.ActionRequest(stop_slew=True))
         except grpc.RpcError as exc:
             logger.warning("cedar-server InitiateAction(stop_slew) failed: %r", exc)
+
+    async def capture_boresight(self) -> None:
+        try:
+            await self._stub.InitiateAction(cedar_pb2.ActionRequest(capture_boresight=True))
+        except grpc.RpcError as exc:
+            logger.warning("cedar-server InitiateAction(capture_boresight) failed: %r", exc)

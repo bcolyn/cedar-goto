@@ -1,12 +1,13 @@
 # cedar-goto
 
-cedar-goto connects [cedar-server](https://github.com/smroid/cedar-server)
-(a plate-solving electronic finder) to a GoTo telescope mount. It shows up
-to your planetarium app as an ordinary ASCOM Alpaca telescope, but under the
-hood it can close the loop on a slew with cedar's plate solves -- nudging
-the mount onto target where its own pointing model falls short, and giving
-you the manual sync controls to build a good pointing model in the first
-place. See [Field workflow](#field-workflow-on-sky) for how the two fit
+cedar-goto facilitates using [cedar-server](https://github.com/smroid/cedar-server)
+(a plate-solving electronic finder) with a GoTo telescope mount. It shows up
+to your planetarium app as an ordinary ASCOM Alpaca telescope, and gives you
+a small web dashboard with the manual controls to build a good mount
+pointing model using cedar's plate solves, and to sync/re-slew against that
+model on demand. It does not drive the mount automatically -- every slew is
+a plain GoTo, and any cedar-assisted correction is something you explicitly
+ask for. See [Field workflow](#field-workflow-on-sky) for how the two fit
 together on-sky.
 
 It's been tested against real Alpaca mount hardware, a real INDI-driven
@@ -15,15 +16,12 @@ simulated-sky mock mode, so you can try the whole thing out with no
 hardware at all.
 
 Highlights:
-- Closed-loop slewing that nudges out mount pointing error using cedar's
-  plate solves -- runtime-toggleable, and it never syncs the mount on its
-  own -- with clean recovery (not a crash or a stuck state) if a solve gets
-  rejected or the mount errors out.
+- A small web UI, grouped by Mount / Target / Cedar, for live status plus
+  manual controls: park/unpark/stop, slew-to-target, sync-to-target,
+  sync-to-cedar, clear sync points.
 - Reported position can come from cedar's plate solve instead of the
   mount's own idea of where it's pointed, falling back to the mount
   automatically if cedar isn't available.
-- A small web UI for live status plus manual sync/abort/park controls.
-- An optional GPIO buzzer for audible feedback on a headless Pi.
 - systemd packaging for easy Raspberry Pi deployment.
 
 ## Field workflow (on-sky)
@@ -44,32 +42,30 @@ anything downstream of it.
 
 The routine that works (C9.25, long focal length, 2026-07 field testing):
 
-1. Power up the mount and cedar-server. Leave **auto-correction** on.
+1. Power up the mount and cedar-server.
 2. GoTo a bright star through cedar-goto, so cedar-server hears about the
-   slew and can offer its own [push-to guidance](#web-ui--buzzer). Find
+   slew and can offer its own [push-to guidance](#web-ui). Find
    the star in the main scope -- red-dot finder, or cedar's push-to arrow
    if cedar still carries its daytime alignment -- and center it with a
    crosshair eyepiece.
 3. With the star centered in the main scope, (re)align cedar's boresight on
    it, in star mode rather than daylight mode.
-4. Press **Sync to target** to sync the mount to that star's commanded
-   coordinate. That's alignment point one.
-5. GoTo a second star. If the pointing is off, let the closed loop nudge it
-   in -- or press **Correct now (nudge to target)** to run it on demand, or
-   nudge by hand following cedar's push-to arrow. Center it in the main
-   scope, then **Sync to target** again.
+4. Press **Sync mount to target** to sync the mount to that star's
+   commanded coordinate. That's alignment point one.
+5. GoTo a second star. If the pointing is off, press **Slew mount to
+   target** to retry the plain GoTo, or nudge by hand following cedar's
+   push-to arrow. Center it in the main scope, then **Sync mount to
+   target** again.
 6. Repeat once more for a third star, then stop. Three carefully centered
    points is the sweet spot: accuracy comes from how precisely each point
    was centered, not from how many there are, and a sloppy point degrades
    the model rather than averaging out (**Clear sync points** to start
    over).
 7. Observe using the mount's own GoTo from here on. With a good three-point
-   model it lands accurately on its own, so there's no need to route
-   everything through the closed loop or to keep syncing -- pick the
-   alignment back up (steps 5-6) only when working far from the alignment
-   stars.
+   model it lands accurately on its own -- pick the alignment back up
+   (steps 5-6) only when working far from the alignment stars.
 
-Sync through cedar-goto's **Sync to target**. Syncing from SkySafari over a
+Sync through cedar-goto's **Sync mount to target**. Syncing from SkySafari over a
 direct INDI connection to the mount corrupts the alignment model instead:
 confirmed 3/3 times live (2026-07-24, incl. after a SkySafari update) that
 its `ON_COORD_SET=SYNC` sends Declination in radians rather than degrees,
@@ -108,27 +104,18 @@ For a real mount, two backends are available:
 .venv/Scripts/python -m pytest tests/ -v
 ```
 
-- `tests/test_closed_loop.py` -- the closed-loop state machine against the
-  mock harness (`adapters/mock/`), which simulates a Skywatcher Wave 150i's
-  harmonic-drive pointing error and cedar's plate-solve stream.
 - `tests/test_alpaca_server.py` -- the external Alpaca proxy (management
   API, discovery gating, plain-proxy slew, capability flags, error
-  envelopes) against the same mock, via an in-process ASGI client (no real
-  HTTP/sockets).
-- `tests/test_closed_loop_alpaca.py` -- the closed loop driven through the
-  HTTP layer (`SlewToCoordinatesAsync` -> `Slewing` -> converged position),
-  the auto-correction toggle (bare-proxy slew when disabled, doesn't abort
-  an in-progress corrected slew), abort, a new slew superseding one in
-  progress, cedar-preferred position reporting, and the give-up paths
-  (persistent solve rejection, non-convergence, unexpected mount/cedar
-  errors) -- including that a fresh slew works normally after a prior one
-  failed.
+  envelopes) against the mock harness (`adapters/mock/`, which simulates a
+  Skywatcher Wave 150i's harmonic-drive pointing error and cedar's
+  plate-solve stream), via an in-process ASGI client (no real HTTP/sockets).
+- `tests/test_cedar_backend.py` -- the cedar-facilitation actions
+  (sync-to-cedar, sync-to-target, slew-to-target) driven through the HTTP
+  layer, the park/parked-slew guards, cedar-preferred position reporting,
+  and an epoch-tagging regression test.
 - `tests/test_web_ui.py` -- the web UI's status/SSE snapshot (including
-  mount info) and its sync-now/sync-to-target/abort/park/unpark/
-  clear-sync-points/correction-toggle actions.
-- `tests/test_buzzer.py` -- the buzzer factory's graceful fallback with no
-  GPIO hardware, and that the closed loop actually calls success()/
-  failure() at the right times.
+  mount info) and its sync-now/sync-to-target/slew-to-target/abort/park/
+  unpark/clear-sync-points actions.
 - `tests/test_indi_backend.py` -- the direct-INDI backend's property-mapping
   logic against a fake `IndiConnection` (no real sockets/`pyindi-client`
   needed, so this runs regardless of whether the `indi` extra is
@@ -139,29 +126,30 @@ For a real mount, two backends are available:
 ```
 src/cedar_goto/
   core/            # framework-free control logic
-    coords.py       # CelestialCoord, angular separation, offset-correction math
+    coords.py       # CelestialCoord, epoch math
     solve.py        # SolveResult, solve-acceptance gating
     ports.py        # MountControl / SolveSource protocols -- the seam
-    loop.py         # ClosedLoopSlew state machine
     _precession.py  # astropy boundary for epoch conversion
   web/             # the external Alpaca face
     alpaca_spec.py  # declarative ITelescopeV3 member table (drives routing)
     alpaca_errors.py# ASCOM error numbers + response envelope
     backend.py      # TelescopeBackend protocol -- the full-surface proxy seam
-    closed_loop_backend.py # intercepts slew/Slewing/AbortSlew, runs
-                     # core.loop.ClosedLoopSlew, proxies everything else
-                     # through to a plain TelescopeBackend
+    cedar_backend.py# adds the cedar-facilitation actions (sync-to-cedar,
+                     # sync-to-target, slew-to-target); every Alpaca member,
+                     # including the slew itself, proxies straight through
+                     # to a plain TelescopeBackend
     telescope_api.py# GET/PUT /api/v1/telescope/{n}/{action}, table-driven
     management.py   # /management/* endpoints
     discovery.py    # UDP discovery responder (port 32227)
     http_utils.py   # shared Alpaca HTTP request/response plumbing
-    ui.py           # web UI: status/SSE, mount info, auto-correction toggle,
-                     # sync-now/sync-to-target/abort/park/unpark/clear-sync-points
+    ui.py           # web UI: status/SSE, mount info,
+                     # sync-now/sync-to-target/slew-to-target/abort/park/
+                     # unpark/clear-sync-points
     app.py          # FastAPI app assembly
   adapters/
     mock/           # World + MockMount + MockCedar + MockTelescopeBackend
                      # + MountEchoCedar (real mount, mocked cedar -- see below)
-    alpaca/         # real mount client (alpyca): MountControl (closed-loop) +
+    alpaca/         # real mount client (alpyca): MountControl +
                      # TelescopeBackend (external proxy) adapters -- verified
                      # against real Alpaca hardware (see below)
     indi/           # direct-INDI mount client via pyindi-client.
@@ -170,8 +158,6 @@ src/cedar_goto/
                      # against real hardware.
     cedar_grpc/      # real cedar-server client (grpc) + generated/ stubs --
                      # verified against a live Cedar-Box (see below)
-    buzzer.py       # optional GPIO buzzer -- soft dependency, no-ops
-                     # cleanly without real GPIO hardware
   config.py         # pydantic config, mirrors config.toml
 proto/              # cedar-server's .proto sources (pulled from smroid/cedar-server)
 scripts/
@@ -182,50 +168,55 @@ packaging/
 ```
 
 `web.backend.TelescopeBackend` is deliberately a separate, larger interface
-from `core.ports.MountControl`: the latter is the minimal seam the
-closed-loop state machine needs, the former is the full ASCOM ITelescopeV3
-surface the external proxy forwards.
+from `core.ports.MountControl`: the latter is the minimal seam
+`CedarTelescopeBackend`'s cedar-facilitation actions need (slew_to/sync_to/
+get_position/...), the former is the full ASCOM ITelescopeV3 surface the
+external proxy forwards.
 
-## Web UI & buzzer
+## Web UI
 
 `http://<host>:<alpaca_port>/` (`11111` by default, see the port-conflict
-note under Deployment if that's taken) serves a status page (live
-state/iteration/error/last-solve via SSE, plus mount info -- location,
-mount UTC date/time, sync-point count, park state). No build step, no
-external assets/CDN, so it works standalone on a Pi with no internet.
+note under Deployment if that's taken) serves a status/action dashboard via
+SSE, grouped into three collapsible panels. No build step, no external
+assets/CDN, so it works standalone on a Pi with no internet -- and it's
+meant to be used from a phone.
 
-Actions: **Correct now (nudge to target)** (runs the closed loop against the
-last commanded target on demand), **Sync now (cedar solve)** (syncs the mount
-straight to cedar's current solve, bypassing the closed loop), **Sync to
-target**, **Abort**, **Park**/**Unpark**, and **Clear sync points**. Park
-aborts any in-flight closed-loop slew first.
+- **Mount** -- location, mount UTC time, park state, sync point count.
+  Actions: **Park**, **Unpark**, **Stop**, **Clear sync points**.
+- **Target** -- whether a planetarium app is connected, the last commanded
+  target, and how long ago it was commanded (so you can tell instructions
+  are actually getting through). Actions: **Slew mount to target** (a
+  single, direct GoTo repeat of the last commanded target -- no solving, no
+  iteration) and **Sync mount to target**.
+- **Cedar** -- cedar's last plate solve, how long ago it was received, and
+  the pointing error between that solve and the last commanded target,
+  decomposed onto the mount's own Alt/Az axes (not RA/Dec) so it maps
+  directly onto "how far off is each mechanical axis". Action: **Sync
+  mount to cedar**. When cedar-goto detects it's running on the same host
+  as cedar-server (`[cedar].address` contains "localhost"), **Start
+  cedar-server**/**Stop cedar-server** buttons also appear here, running
+  `sudo systemctl start/stop cedar` locally -- see "Start/stop cedar-server"
+  below for the sudoers setup this needs. Hidden entirely (and refused
+  server-side even if called directly) otherwise.
 
-**Sync to target** is the one to reach for while aligning (see
+**Sync mount to target** is the one to reach for while aligning (see
 [Field workflow](#field-workflow-on-sky)): it syncs to the coordinate you
-asked for, once *you* have confirmed the main scope is on it. **Sync now
-(cedar solve)** is only ever as good as cedar's boresight alignment to the
-main scope -- it's for when you trust that alignment and can't center the
-target by hand.
-
-The closed loop itself never syncs the mount on its own anymore: a plate
-solve landing within `tolerance_arcmin` only proves cedar thinks the mount
-is on target, not that it actually is for your optical path (a cedar box
-mechanically offset from the main scope will confidently agree with itself
-while still being wrong -- confirmed on-sky 2026-07-23, and exactly what
-corrupted a real mount's own accurate alignment model). Instead: the closed
-loop nudges the mount (via cedar's plate solves) only while the measured
-error is between `tolerance_arcmin` ("min_move") and `max_correction_arcmin`
-("max_move", disabled by default -- see config.toml) -- above that, it
-reports **OUT_OF_RANGE** and does nothing further automatically, since an
-error that large is more likely a bad solve than real pointing error.
-Center the target in the main scope by hand, then press **Sync to target**
-to sync the mount to the coordinate you originally requested (not to
-cedar's solve). **Sync now (cedar solve)** and any automatic mount.sync_to()
-still refuse to run against a solve that isn't a real plate solve (e.g. the
-`MountEchoCedar` loopback used to exercise a real mount without a working
-cedar-server) -- otherwise it'd calibrate the mount's persistent
+asked for, once *you* have confirmed the main scope is on it. **Sync mount
+to cedar** is only ever as good as cedar's boresight alignment to the main
+scope -- it's for when you trust that alignment and can't center the target
+by hand. Both refuse to sync against a solve that isn't a real plate solve
+(e.g. the `MountEchoCedar` loopback used to exercise a real mount without a
+working cedar-server) -- otherwise it'd calibrate the mount's persistent
 alignment/sync-point database against its own already-possibly-wrong belief
 instead of real sky data.
+
+cedar-goto does not drive the mount automatically: `SlewToCoordinates(Async)`
+is always a plain GoTo, proxied straight through. GoTo accuracy is normally
+good enough once there's a nearby sync point (see
+[Field workflow](#field-workflow-on-sky)) -- if it's off, **Slew mount to
+target** or a manual nudge (see push-to guidance below) is the explicit,
+one-command fix, rather than an automatic correction loop running behind
+your back.
 
 Since cedar-goto intercepts the ASCOM slew and drives the mount itself,
 cedar-server has no way to know a GoTo is happening unless told -- so every
@@ -233,33 +224,14 @@ slew calls cedar-server's `InitiateAction(initiate_slew=...)` (found missing
 2026-07-24), letting it offer its own push-to guidance (the `SlewRequest`
 fields in `FrameResult` -- distance/angle to target -- as shown by Cedar
 Aim's live view) for manually nudging the mount, e.g. via a handset or an
-LX200 bridge. This stays active through `CONVERGED`/`FAILED`/`OUT_OF_RANGE`
--- the whole point of the design above is that a human may still need to
-nudge onto target afterward -- and is only cleared (`stop_slew`) by
-Abort/Park or by pressing **Sync to target**. Best-effort: a cedar-server
-error here is logged and swallowed, never breaks the actual slew.
-`MockCedar`/`MountEchoCedar` no-op this (nothing real to notify).
-
-An **auto-correction** toggle on the dashboard disables the closed loop
-entirely at runtime (no restart needed): with it off, SlewToCoordinates(Async)
-is a bare proxy straight to the mount, same as before the closed loop
-existed -- for when cedar's solves aren't trustworthy enough to act on right
-now. cedar-goto still remembers the commanded target either way, so **Sync
-to target** keeps working after a bare slew too -- as does **Correct now
-(nudge to target)**, which runs the loop once against that remembered target
-regardless of the toggle, for when you turned correction off (or the slew has
-already finished) and then changed your mind. It leaves the toggle alone, and
-refuses while a closed-loop slew is already running.
+LX200 bridge. This stays active until you're done -- cleared (`stop_slew`)
+by **Stop**/**Park** or by pressing **Sync mount to target**. Best-effort: a
+cedar-server error here is logged and swallowed, never breaks the actual
+slew. `MockCedar`/`MountEchoCedar` no-op this (nothing real to notify).
 
 Sync-point count and Clear are INDI-specific (no ASCOM Alpaca equivalent
 exists); they show as "not supported" against the `alpyca`/`mock` backends.
-Location and mount UTC date/time work identically against any backend.
-
-The GPIO buzzer (`[buzzer]` in config) is a soft dependency by design: it's
-an optional extra (`pip install cedar-goto[buzzer]`), gpiozero is imported
-lazily, and if it's enabled but no GPIO hardware is actually available
-(dev machine, missing package, bad pin), it logs a warning and silently
-no-ops rather than crashing the app.
+Location and mount UTC time work identically against any backend.
 
 ## Deployment (Raspberry Pi / systemd)
 
@@ -271,13 +243,8 @@ journalctl -u cedar-goto -f
 ```
 
 Re-running `install.sh` upgrades the code + venv in place without touching
-an existing `config.toml` -- or `state.toml`, a second, install.sh-managed
-file next to it that the running service writes to itself (currently just
-the web UI's auto-correction toggle, so it survives a restart with
-whatever you last set it to; see `[loop].correction_enabled` in
-`config.toml` for the fallback before it's ever been toggled). See
-`packaging/cedar-goto.service` for the unit file (adds the service user to
-the `gpio` group for the buzzer; harmless if unused).
+an existing `config.toml`. See `packaging/cedar-goto.service` for the unit
+file.
 
 `install.sh` also installs `pyindi-client` (needed for `[mount].backend =
 "indi"`) with `--no-deps`, regardless of which backend you end up using --
@@ -316,6 +283,28 @@ discovery = false
 The tradeoff is that Alpaca clients (SkySafari, Cartes du Ciel, etc.) won't
 auto-discover cedar-goto anymore -- enter `<host>:11112` (or whatever port
 you chose) manually in the client instead.
+
+### Start/stop cedar-server
+
+The web UI's Start/Stop cedar-server buttons (Cedar panel, only shown when
+`[cedar].address` contains "localhost") shell out to `sudo systemctl
+start/stop cedar` on the box cedar-goto itself is running on. This only
+works if the service user (`cedar-goto` by default, see `packaging/
+cedar-goto.service`) has **passwordless sudo** for exactly those two
+commands -- `install.sh` does not set this up automatically (it's a system
+security policy change, deliberately left as a manual step). Add a sudoers
+drop-in:
+
+```sh
+echo 'cedar-goto ALL=(ALL) NOPASSWD: /usr/bin/systemctl start cedar, /usr/bin/systemctl stop cedar' \
+  | sudo tee /etc/sudoers.d/cedar-goto-cedar-service
+sudo visudo -c   # validate the file before trusting it
+```
+
+Without this, the buttons fail cleanly with whatever `sudo`/`systemctl`
+printed (typically "sudo: a password is required") rather than hanging --
+`cedar_service.cedar_systemctl()` runs with stdin closed and a timeout, so
+a missing NOPASSWD entry can't leave a request stuck.
 
 ## Regenerating gRPC stubs
 

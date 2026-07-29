@@ -19,8 +19,6 @@ SERVICE_USER="${CEDAR_GOTO_USER:-cedar-goto}"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 id -u "$SERVICE_USER" >/dev/null 2>&1 || useradd --system --home "$INSTALL_DIR" --create-home --shell /usr/sbin/nologin "$SERVICE_USER"
-# Needed only for the GPIO buzzer; harmless if the group doesn't exist.
-usermod -aG gpio "$SERVICE_USER" 2>/dev/null || true
 
 mkdir -p "$INSTALL_DIR"
 # config*.toml examples (config-ascom-sim.toml, config-indi.toml) are dev/
@@ -31,7 +29,6 @@ mkdir -p "$INSTALL_DIR"
 rsync -a --delete \
     --exclude='.venv' --exclude='.git' --exclude='__pycache__' --exclude='*.egg-info' \
     --exclude='config.toml' --exclude='config-ascom-sim.toml' --exclude='config-indi.toml' \
-    --exclude='state.toml' --exclude='state.toml.tmp' \
     "$REPO_DIR"/ "$INSTALL_DIR"/
 
 python3 -m venv "$INSTALL_DIR/.venv"
@@ -45,8 +42,6 @@ python3 -m venv "$INSTALL_DIR/.venv"
 # also-unused requests/bottle deps); installed unconditionally since it's a
 # small, harmless extra even when backend = "alpyca"/"mock".
 "$INSTALL_DIR/.venv/bin/pip" install --no-deps pyindi-client
-# For the optional GPIO buzzer (DESIGN.md §7), instead run:
-#   "$INSTALL_DIR/.venv/bin/pip" install "$INSTALL_DIR[buzzer]"
 
 if [ ! -f "$INSTALL_DIR/config.toml" ]; then
     cp "$REPO_DIR/config.toml" "$INSTALL_DIR/config.toml"

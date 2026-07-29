@@ -1,5 +1,6 @@
-"""Phase 4: the minimal web UI (DESIGN.md §8) -- status snapshot, SSE
-events, and the sync-now/abort actions."""
+"""The web UI (DESIGN.md §8) -- status snapshot, SSE events, and the
+mount/target/cedar actions (park/unpark/stop, slew/sync-to-target,
+sync-to-cedar)."""
 from __future__ import annotations
 
 import asyncio
@@ -12,23 +13,20 @@ from cedar_goto.adapters.mock.mount import MockMount
 from cedar_goto.adapters.mock.telescope_backend import MockTelescopeBackend
 from cedar_goto.adapters.mock.world import HarmonicErrorModel, World
 from cedar_goto.config import PositionSourceConfig
-from cedar_goto.core.loop import LoopConfigCore
 from cedar_goto.core.solve import SolveAcceptance
 from cedar_goto.web.app import create_app
-from cedar_goto.web.closed_loop_backend import ClosedLoopTelescopeBackend
+from cedar_goto.web.cedar_backend import CedarTelescopeBackend
 
 BASE = "http://testserver"
 
 
-def make_client(world: World, **loop_overrides) -> httpx.AsyncClient:
+def make_client(
+    world: World, cedar_ui_url: str | None = None, cedar_same_host: bool = False
+) -> httpx.AsyncClient:
     inner = MockTelescopeBackend(world)
     mount, cedar = MockMount(world), MockCedar(world)
-    defaults = dict(tolerance_arcmin=1.0, max_iterations=3, settle_s=0.01)
-    defaults.update(loop_overrides)
-    backend = ClosedLoopTelescopeBackend(
-        inner, mount, cedar, LoopConfigCore(**defaults), SolveAcceptance(), PositionSourceConfig(source="mount")
-    )
-    app = create_app(backend)
+    backend = CedarTelescopeBackend(inner, mount, cedar, SolveAcceptance(), PositionSourceConfig(source="mount"))
+    app = create_app(backend, cedar_ui_url=cedar_ui_url, cedar_same_host=cedar_same_host)
     return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=BASE)
 
 
@@ -40,12 +38,62 @@ async def test_index_page_serves_html():
         assert "cedar-goto" in resp.text
 
 
-async def test_status_reflects_idle_then_converged():
+async def test_index_page_has_no_cedar_link_by_default():
+    async with make_client(World()) as client:
+        resp = await client.get("/")
+        assert "link: null," in resp.text
+
+
+async def test_index_page_embeds_the_cedar_ui_url_when_configured():
+    async with make_client(World(), cedar_ui_url="http://cedar.example.com/") as client:
+        resp = await client.get("/")
+        assert 'link: "http://cedar.example.com/",' in resp.text
+
+
+async def test_index_page_hides_cedar_service_row_by_default():
+    async with make_client(World()) as client:
+        resp = await client.get("/")
+        assert "if (false) {" in resp.text
+
+
+async def test_index_page_shows_cedar_service_row_when_same_host():
+    async with make_client(World(), cedar_same_host=True) as client:
+        resp = await client.get("/")
+        assert "if (true) {" in resp.text
+
+
+async def test_cedar_start_stop_refused_when_not_same_host():
+    async with make_client(World()) as client:
+        for action in ("cedar-start", "cedar-stop"):
+            resp = await client.post(f"/api/ui/actions/{action}")
+            body = resp.json()
+            assert body["ok"] is False
+            assert "not on this host" in body["message"]
+
+
+async def test_cedar_start_stop_call_systemctl_when_same_host():
+    from unittest.mock import AsyncMock, patch
+
+    async with make_client(World(), cedar_same_host=True) as client:
+        with patch(
+            "cedar_goto.web.ui.cedar_systemctl", AsyncMock(return_value=(True, "cedar-server started"))
+        ) as mock_systemctl:
+            resp = await client.post("/api/ui/actions/cedar-start")
+        body = resp.json()
+        assert body["ok"] is True
+        assert body["message"] == "cedar-server started"
+        mock_systemctl.assert_awaited_once_with("start")
+
+
+async def test_status_reflects_connected_and_solve():
     world = World(error_model=HarmonicErrorModel())
     async with make_client(world) as client:
         idle = (await client.get("/api/ui/status")).json()
-        assert idle["state"] == "IDLE"
         assert idle["connected"] is False
+        assert idle["last_target"] is None
+        # MockCedar always has a live solve ready -- reflects cedar's
+        # current state, not a cached result from any prior action.
+        assert idle["last_solve"] is not None
 
         await client.put("/api/v1/telescope/0/connected", data={"Connected": "true"})
         await client.put(
@@ -55,16 +103,14 @@ async def test_status_reflects_idle_then_converged():
 
         for _ in range(200):
             await asyncio.sleep(0.02)
-            status = (await client.get("/api/ui/status")).json()
-            if status["state"] in ("CONVERGED", "FAILED"):
+            if (await client.get("/api/v1/telescope/0/slewing")).json()["Value"] is False:
                 break
         else:
             pytest.fail("slew never settled")
 
-        assert status["state"] == "CONVERGED"
+        status = (await client.get("/api/ui/status")).json()
         assert status["connected"] is True
-        assert status["last_solve"] is not None
-        assert status["error_arcmin"] is not None
+        assert status["last_target"]["ra_deg"] == pytest.approx(60.0)
 
 
 async def test_sync_now_action():
@@ -75,6 +121,22 @@ async def test_sync_now_action():
         body = resp.json()
         assert body["ok"] is True
         assert "RA" in body["message"]
+
+
+async def test_realign_action():
+    world = World()
+    async with make_client(world) as client:
+        resp = await client.post("/api/ui/actions/realign")
+        body = resp.json()
+        assert body["ok"] is True
+
+
+async def test_log_action_returns_lines():
+    world = World()
+    async with make_client(world) as client:
+        resp = await client.get("/api/ui/log")
+        body = resp.json()
+        assert isinstance(body["lines"], list)
 
 
 async def test_sync_to_target_action_reports_no_target_yet():
@@ -106,53 +168,18 @@ async def test_sync_to_target_action_syncs_to_the_commanded_target_not_the_solve
         assert "RA 4.000h Dec 15.000" in body["message"]
 
 
-async def test_correction_toggle_reflected_in_status_and_disables_the_loop():
-    world = World(error_model=HarmonicErrorModel())
-    async with make_client(world) as client:
-        status = (await client.get("/api/ui/status")).json()
-        assert status["correction_enabled"] is True
-
-        resp = await client.post("/api/ui/actions/correction", data={"enabled": "false"})
-        assert resp.json()["ok"] is True
-        status = (await client.get("/api/ui/status")).json()
-        assert status["correction_enabled"] is False
-
-        await client.put("/api/v1/telescope/0/connected", data={"Connected": "true"})
-        await client.put(
-            "/api/v1/telescope/0/slewtocoordinatesasync",
-            data={"RightAscension": "4.0", "Declination": "15.0"},
-        )
-        # No closed loop should ever run -- state stays IDLE throughout.
-        for _ in range(20):
-            await asyncio.sleep(0.02)
-            assert (await client.get("/api/ui/status")).json()["state"] == "IDLE"
-
-        for _ in range(200):
-            await asyncio.sleep(0.02)
-            if (await client.get("/api/v1/telescope/0/slewing")).json()["Value"] is False:
-                break
-        else:
-            pytest.fail("bare slew never settled")
-
-        status = (await client.get("/api/ui/status")).json()
-        assert status["last_target"]["ra_deg"] == pytest.approx(60.0)
-
-
-async def test_correct_now_reports_no_target_yet():
+async def test_reslew_to_target_reports_no_target_yet():
     async with make_client(World()) as client:
-        resp = await client.post("/api/ui/actions/correct-now")
+        resp = await client.post("/api/ui/actions/reslew-to-target")
         body = resp.json()
         assert body["ok"] is False
         assert "no target" in body["message"]
 
 
-async def test_correct_now_runs_the_loop_even_with_auto_correction_off():
-    """The on-demand button is the escape hatch for "auto-correction is off
-    and I changed my mind" -- a bare proxy slew leaves the mount at its raw
-    pointing error, and pressing this must still close the loop on it."""
+async def test_reslew_to_target_reissues_a_bare_slew():
+    """A single mount.slew_to() repeat -- no cedar solving, no iteration."""
     world = World(error_model=HarmonicErrorModel())
     async with make_client(world) as client:
-        await client.post("/api/ui/actions/correction", data={"enabled": "false"})
         await client.put("/api/v1/telescope/0/connected", data={"Connected": "true"})
         await client.put(
             "/api/v1/telescope/0/slewtocoordinatesasync",
@@ -164,39 +191,18 @@ async def test_correct_now_runs_the_loop_even_with_auto_correction_off():
                 break
         else:
             pytest.fail("bare slew never settled")
-        assert (await client.get("/api/ui/status")).json()["state"] == "IDLE"
 
-        resp = await client.post("/api/ui/actions/correct-now")
-        assert resp.json()["ok"] is True
+        resp = await client.post("/api/ui/actions/reslew-to-target")
+        body = resp.json()
+        assert body["ok"] is True
+        assert "RA 4.000h Dec 15.000" in body["message"]
 
         for _ in range(200):
             await asyncio.sleep(0.02)
-            status = (await client.get("/api/ui/status")).json()
-            if status["state"] in ("CONVERGED", "FAILED"):
+            if (await client.get("/api/v1/telescope/0/slewing")).json()["Value"] is False:
                 break
         else:
-            pytest.fail("on-demand correction never settled")
-
-        assert status["state"] == "CONVERGED"
-        # Still off -- the button is a one-shot, not a way to flip the toggle.
-        assert status["correction_enabled"] is False
-
-
-async def test_correct_now_refuses_while_a_loop_is_running():
-    world = World(error_model=HarmonicErrorModel())
-    async with make_client(world, max_iterations=10) as client:
-        await client.put("/api/v1/telescope/0/connected", data={"Connected": "true"})
-        await client.put(
-            "/api/v1/telescope/0/slewtocoordinatesasync",
-            data={"RightAscension": "4.0", "Declination": "15.0"},
-        )
-        assert (await client.get("/api/v1/telescope/0/slewing")).json()["Value"] is True
-
-        body = (await client.post("/api/ui/actions/correct-now")).json()
-        assert body["ok"] is False
-        assert "already running" in body["message"]
-
-        await client.post("/api/ui/actions/abort")
+            pytest.fail("re-slew never settled")
 
 
 async def test_status_includes_mount_info_with_sync_points_unsupported_by_mock():
@@ -244,7 +250,7 @@ async def test_clear_sync_points_action_reports_unsupported_for_mock():
 
 async def test_abort_action_stops_a_running_slew():
     world = World(error_model=HarmonicErrorModel())
-    async with make_client(world, max_iterations=10) as client:
+    async with make_client(world) as client:
         await client.put("/api/v1/telescope/0/connected", data={"Connected": "true"})
         await client.put(
             "/api/v1/telescope/0/slewtocoordinatesasync",

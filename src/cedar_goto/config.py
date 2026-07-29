@@ -49,29 +49,6 @@ class SiteConfig(BaseModel):
     the mock."""
 
 
-class LoopConfig(BaseModel):
-    tolerance_arcmin: float = 1.0
-    """"min_move": below this measured error, the loop stops nudging and
-    reports converged."""
-    max_correction_arcmin: float | None = None
-    """"max_move": above this measured error, the loop refuses to nudge
-    automatically and reports out-of-range instead of slewing on a
-    solve that far off (more likely a bad solve than real pointing error).
-    None disables the check."""
-    max_iterations: int = 3
-    settle_ms: int = 1500
-    correction_enabled: bool = True
-    """Starting state of the web UI's auto-correction toggle -- can be
-    flipped at runtime from the dashboard without restarting the service.
-    With it off, SlewToCoordinates(Async) is a bare proxy to the mount (no
-    cedar feedback/nudging). Only takes effect until the toggle is first
-    flipped from the dashboard -- after that, state.toml (state.py, a
-    sibling of this config file) remembers the last value and takes over on
-    every subsequent restart, since the whole point of persisting it is to
-    survive a restart with whatever the user last chose. Delete state.toml
-    to fall back to this setting again."""
-
-
 class SolveConfig(BaseModel):
     min_matches: int = 10
     max_prob_false_positive: float = 1e-3
@@ -80,12 +57,6 @@ class SolveConfig(BaseModel):
     better."""
     max_p90_error_arcsec: float = 30.0
     reject_imu: bool = True
-
-
-class BuzzerConfig(BaseModel):
-    enabled: bool = False
-    gpio_pin: int = 18
-    pattern: str = "success"
 
 
 class PositionSourceConfig(BaseModel):
@@ -98,9 +69,7 @@ class Config(BaseModel):
     cedar: CedarConfig = CedarConfig()
     server: ServerConfig = ServerConfig()
     site: SiteConfig = SiteConfig()
-    loop: LoopConfig = LoopConfig()
     solve: SolveConfig = SolveConfig()
-    buzzer: BuzzerConfig = BuzzerConfig()
     position: PositionSourceConfig = PositionSourceConfig()
 
     @classmethod

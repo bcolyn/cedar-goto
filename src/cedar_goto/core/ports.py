@@ -14,7 +14,8 @@ from cedar_goto.core.solve import SolveResult
 
 
 class MountControl(Protocol):
-    """What the closed loop needs from a GoTo mount."""
+    """What CedarTelescopeBackend's cedar-facilitation actions need from a
+    GoTo mount."""
 
     async def slew_to(self, target: CelestialCoord) -> None:
         """Command an async slew. Returns once the command is accepted (not once settled)."""
@@ -36,7 +37,8 @@ class MountControl(Protocol):
 
 
 class SolveSource(Protocol):
-    """What the closed loop needs from cedar-server."""
+    """What CedarTelescopeBackend's cedar-facilitation actions need from
+    cedar-server."""
 
     def stream_solves(self) -> AsyncIterator[SolveResult]:
         """Long-lived stream of plate-solve frame results (cedar GetFrames)."""
@@ -61,4 +63,14 @@ class SolveSource(Protocol):
         """Tell cedar-server the slew is finished/discontinued (cedar.proto
         ActionRequest.stop_slew), clearing any push-to guidance it was
         showing. Same no-raise contract as notify_slew_started()."""
+        ...
+
+    async def capture_boresight(self) -> None:
+        """Web UI "Realign" action: tell cedar-server to update/refine its
+        boresight offset now, using the target currently centered in the
+        telescope's field of view (cedar.proto ActionRequest.
+        capture_boresight) -- the same effect as pressing Realign in
+        cedar-server's own UI (e.g. Cedar Aim). Per cedar.proto, meant for
+        use during an active slew to target. Same no-raise contract as
+        notify_slew_started()."""
         ...
