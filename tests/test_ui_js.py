@@ -40,6 +40,11 @@ var document = {
 var EventSource = function(url) { this.url = url; this.onmessage = null; };
 EventSource.prototype.close = function() {};
 var fetch = function() { return Promise.resolve({ json: function() { return Promise.resolve({}); } }); };
+var localStorage = {
+  _data: {},
+  getItem: function(k) { return Object.prototype.hasOwnProperty.call(this._data, k) ? this._data[k] : null; },
+  setItem: function(k, v) { this._data[k] = String(v); },
+};
 """
 
 

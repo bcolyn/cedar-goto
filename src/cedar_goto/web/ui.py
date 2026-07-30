@@ -333,7 +333,7 @@ _PAGE = """<!doctype html>
 </head>
 <body>
 <h1>cedar-goto</h1>
-<details class="card" id="wizard-card" open>
+<details class="card" id="wizard-card">
   <summary>Setup wizard</summary>
   <h3 id="wizard-title"></h3>
   <ul class="wizard-list" id="wizard-body"></ul>
@@ -511,6 +511,23 @@ function wizardBack() {
   renderWizard();
 }
 renderWizard();
+const WIZARD_OPEN_KEY = 'cedar-goto-wizard-open';
+const WIZARD_OPEN_TTL_MS = 24 * 60 * 60 * 1000;
+function wizardShouldBeOpen() {
+  const raw = localStorage.getItem(WIZARD_OPEN_KEY);
+  if (!raw) return true;
+  try {
+    const { open, savedAt } = JSON.parse(raw);
+    return (Date.now() - savedAt > WIZARD_OPEN_TTL_MS) ? true : open !== false;
+  } catch (e) {
+    return true;
+  }
+}
+const wizardCard = document.getElementById('wizard-card');
+wizardCard.open = wizardShouldBeOpen();
+wizardCard.addEventListener('toggle', () => {
+  localStorage.setItem(WIZARD_OPEN_KEY, JSON.stringify({ open: wizardCard.open, savedAt: Date.now() }));
+});
 renderCedarLinkRow('cedar-link-row', CEDAR_UI_LINK);
 if (__CEDAR_SAME_HOST__) {
   document.getElementById('cedar-service-row').style.display = '';
