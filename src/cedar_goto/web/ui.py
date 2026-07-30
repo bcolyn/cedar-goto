@@ -380,6 +380,7 @@ _PAGE = """<!doctype html>
   <div class="button-row">
     <button onclick="post('/api/ui/actions/sync-now', this)">✓ Sync mount to cedar</button>
   </div>
+  <div class="button-row" id="cedar-link-row"></div>
   <div class="button-row" id="cedar-service-row" style="display:none;">
     <button onclick="post('/api/ui/actions/cedar-start', this)">Start cedar-server</button>
     <button class="danger" onclick="post('/api/ui/actions/cedar-stop', this)">Stop cedar-server</button>
@@ -394,6 +395,7 @@ _PAGE = """<!doctype html>
 </details>
 <div id="message"></div>
 <script>
+const CEDAR_UI_LINK = __CEDAR_UI_LINK__;
 const WIZARD_STEPS = [
   {
     title: 'Start of session',
@@ -410,7 +412,7 @@ const WIZARD_STEPS = [
       'Center the bright star in the main scope. Use a crosshair eyepiece if you have one.',
       '"Sync mount to target" to tell the mount that it now really is pointing where it thought it was pointing.',
     ],
-    link: __CEDAR_UI_LINK__,
+    link: CEDAR_UI_LINK,
     action: { label: 'Sync mount to target', endpoint: '/api/ui/actions/sync-to-target' },
     after: [
       'Re-check centering of star in main scope.',
@@ -455,7 +457,7 @@ function renderWizard() {
     li.textContent = line;
     bodyEl.appendChild(li);
   });
-  renderWizardLinkRow('wizard-link-row', step.link);
+  renderCedarLinkRow('wizard-link-row', step.link);
   renderWizardActionRow('wizard-action-row', step.action);
   const afterEl = document.getElementById('wizard-after');
   afterEl.innerHTML = '';
@@ -481,7 +483,7 @@ function renderWizardActionRow(rowId, action) {
   btn.onclick = () => post(action.endpoint, btn);
   row.appendChild(btn);
 }
-function renderWizardLinkRow(rowId, url) {
+function renderCedarLinkRow(rowId, url) {
   const row = document.getElementById(rowId);
   row.innerHTML = '';
   if (!url) {
@@ -491,7 +493,7 @@ function renderWizardLinkRow(rowId, url) {
   row.style.display = '';
   const link = document.createElement('a');
   link.href = url;
-  link.target = '_blank';
+  link.target = 'cedar-server-ui';
   link.rel = 'noopener';
   link.textContent = 'Open cedar-server ↗';
   row.appendChild(link);
@@ -511,6 +513,7 @@ function wizardBack() {
   renderWizard();
 }
 renderWizard();
+renderCedarLinkRow('cedar-link-row', CEDAR_UI_LINK);
 if (__CEDAR_SAME_HOST__) {
   document.getElementById('cedar-service-row').style.display = '';
 }

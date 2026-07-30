@@ -58,13 +58,13 @@ async def test_index_page_serves_html():
 async def test_index_page_has_no_cedar_link_by_default():
     async with make_client(World()) as client:
         resp = await client.get("/")
-        assert "link: null," in resp.text
+        assert "const CEDAR_UI_LINK = null;" in resp.text
 
 
 async def test_index_page_embeds_the_cedar_ui_url_when_configured():
     async with make_client(World(), cedar_address="cedar.example.com:80") as client:
         resp = await client.get("/")
-        assert 'link: "http://cedar.example.com:80/",' in resp.text
+        assert 'const CEDAR_UI_LINK = "http://cedar.example.com:80/";' in resp.text
 
 
 async def test_index_page_resolves_a_loopback_cedar_address_against_the_request_host():
@@ -75,11 +75,11 @@ async def test_index_page_resolves_a_loopback_cedar_address_against_the_request_
     instead when opened from a phone."""
     async with make_client(World(), cedar_address="localhost:80") as client:
         resp = await client.get("/")
-        assert 'link: "http://testserver:80/",' in resp.text
+        assert 'const CEDAR_UI_LINK = "http://testserver:80/";' in resp.text
 
     async with make_client(World(), cedar_address="127.0.0.1:80") as client:
         resp = await client.get("/")
-        assert 'link: "http://testserver:80/",' in resp.text
+        assert 'const CEDAR_UI_LINK = "http://testserver:80/";' in resp.text
 
 
 async def test_index_page_hides_cedar_service_row_by_default():
