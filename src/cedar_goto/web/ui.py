@@ -405,7 +405,7 @@ const WIZARD_STEPS = [
     action: { label: 'Unpark', endpoint: '/api/ui/actions/unpark' },
   },
   {
-    title: 'First star',
+    title: 'First alignment point',
     body: [
       'Go-to a bright star from planetarium.',
       'Find it using your red dot finder, or cedar-server.',
@@ -420,29 +420,27 @@ const WIZARD_STEPS = [
     ],
   },
   {
-    title: 'Second star',
+    title: 'Second alignment point',
     body: [
-      'Go-to a second bright star from planetarium.',
-      'Find the second bright star using the now well-aligned cedar-server.',
-      'Center the second bright star in the main scope.',
-      '"Sync mount to target".',
+      'Slew the mount away from the first point. Make it a big slew, a different wind direction if possible.',
+      'Let the mount settle for a few seconds.',
+      '"Sync mount to cedar" will plate solve and add a second alignment point.',
     ],
-    action: { label: 'Sync mount to target', endpoint: '/api/ui/actions/sync-to-target' },
+    action: { label: '✓ Sync mount to cedar', endpoint: '/api/ui/actions/sync-now' },
   },
   {
-    title: 'Third star (optional, but recommended)',
+    title: 'Third alignment point',
     body: [
-      'Go-to a 3rd bright star from planetarium.',
-      'Find the 3rd bright star using the now well-aligned cedar-server.',
-      'Center the 3rd bright star in the main scope.',
-      '"Sync mount to target".',
+      'Slew the mount away from the second and first point. Preferably somewhat near where you want to start observing.',
+      'Let the mount settle for a few seconds.',
+      '"Sync mount to cedar" will plate solve and add a third alignment point.',
     ],
-    action: { label: 'Sync mount to target', endpoint: '/api/ui/actions/sync-to-target' },
+    action: { label: '✓ Sync mount to cedar', endpoint: '/api/ui/actions/sync-now' },
   },
   {
     title: 'Done',
     body: [
-      'Done.',
+      'Done. From now on, use the planetarium to go-to your target. If the goto is off, use "✓ Sync mount to cedar" followed by "✥ Slew mount to target"',
     ],
   },
 ];
