@@ -140,7 +140,20 @@ async def _run(config: Config) -> None:
     )
 
     server = uvicorn.Server(
-        uvicorn.Config(app, host=config.server.bind, port=config.server.alpaca_port, log_level="info")
+        uvicorn.Config(
+            app,
+            host=config.server.bind,
+            port=config.server.alpaca_port,
+            log_level="info",
+            # uvicorn's default (5s) is shorter than SkySafari's natural
+            # polling gaps (observed 6-8s+ between requests during idle UI
+            # moments), so the server was closing "idle" keep-alive
+            # connections right as SkySafari went to reuse them -- a race
+            # that left sockets stuck in LAST-ACK server-side and forced
+            # SkySafari into periodic full ASCOM reconnects with no
+            # corresponding wlan0 radio drop (2026-08-08 bench session).
+            timeout_keep_alive=60,
+        )
     )
 
     tasks = [asyncio.create_task(server.serve())]
