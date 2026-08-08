@@ -27,11 +27,25 @@ function makeEl() {
     children: [],
     appendChild: function(c) { this.children.push(c); },
     addEventListener: function() {},
+    setAttribute: function() {},
     set innerHTML(v) { this.children = []; },
     get innerHTML() { return ''; },
   };
 }
+function makeClassList() {
+  var set = {};
+  return {
+    add: function(c) { set[c] = true; },
+    remove: function(c) { delete set[c]; },
+    contains: function(c) { return !!set[c]; },
+    toggle: function(c) {
+      if (set[c]) { delete set[c]; return false; }
+      set[c] = true; return true;
+    },
+  };
+}
 var document = {
+  documentElement: { classList: makeClassList() },
   getElementById: function(id) { return makeEl(); },
   createElement: function(tag) { return makeEl(); },
   addEventListener: function() {},
@@ -49,9 +63,14 @@ var localStorage = {
 
 
 def _extract_script(page: str) -> str:
-    match = re.search(r"<script>\n(.*?)\n</script>", page, re.S)
-    assert match is not None, "no <script> block found in the rendered page"
-    return match.group(1)
+    # Two <script> blocks now: the head's early night-mode-class script (runs
+    # before <body> parses, to avoid a flash of full brightness before
+    # switching to red) and the main body script. Concatenating both keeps
+    # this test's escaping-bug coverage (see module docstring) on the new one
+    # too, rather than silently only checking the first match.
+    blocks = re.findall(r"<script>\n(.*?)\n</script>", page, re.S)
+    assert blocks, "no <script> block found in the rendered page"
+    return "\n\n".join(blocks)
 
 
 def test_page_script_is_valid_javascript_and_defines_the_wizard_handlers():

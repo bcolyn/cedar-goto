@@ -287,13 +287,42 @@ _PAGE = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>cedar-goto</title>
 <style>
+  /* Night-vision mode (DESIGN.md-adjacent addition): preserving dark
+     adaptation needs red-only light, not just a dark theme -- the default
+     theme below is already dark grey/green/orange but that still emits
+     enough blue-ish light to hurt adaptation. Every color is a variable so
+     `:root.night` can repaint everything to shades of red without a second
+     copy of each rule. `applyStoredNightMode()` (inline, in <head>, before
+     <body>) adds the `night` class to <html> -- not `<body>`, which doesn't
+     exist yet when that script runs -- so the correct theme paints on first
+     frame instead of flashing bright-then-red.
+  */
+  :root {
+    --bg: #111; --card-bg: #1c1c1c; --text: #eee; --muted: #999; --border: #333;
+    --badge-neutral: #444; --badge-parked: #7a4a12; --badge-good: #1a5c34; --badge-bad: #5c1a1a;
+    --btn-bg: #2a6b3f; --btn-active-bg: #1f5030; --btn-text: #fff;
+    --btn-danger-bg: #6b2a2a; --btn-danger-active-bg: #4f1f1f;
+    --log-bg: #111; --log-text: #ccc;
+  }
+  :root.night {
+    --bg: #000; --card-bg: #0c0000; --text: #ff3b3b; --muted: #8a1414; --border: #3a0808;
+    --badge-neutral: #2a0606; --badge-parked: #5a1010; --badge-good: #7a1414; --badge-bad: #2a0606;
+    --btn-bg: #4a0d0d; --btn-active-bg: #360909; --btn-text: #ff5c5c;
+    --btn-danger-bg: #5a1010; --btn-danger-active-bg: #400b0b;
+    --log-bg: #000; --log-text: #b32020;
+  }
   * { box-sizing: border-box; }
-  body { font-family: system-ui, sans-serif; margin: 0 auto; padding: 1rem; max-width: 640px; background: #111; color: #eee; }
-  h1 { font-size: 1.3rem; margin: 0 0 1rem; }
-  .card { background: #1c1c1c; border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1rem; }
+  body { font-family: system-ui, sans-serif; margin: 0 auto; padding: 1rem; max-width: 640px; background: var(--bg); color: var(--text); }
+  .header-row { display: flex; align-items: center; justify-content: space-between; margin: 0 0 1rem; }
+  h1 { font-size: 1.3rem; margin: 0; }
+  #night-toggle {
+    background: var(--card-bg); border: 1px solid var(--border); color: var(--text);
+    min-height: 2.4rem; padding: 0.4rem 0.8rem; font-size: 1.1rem; border-radius: 8px;
+  }
+  .card { background: var(--card-bg); border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1rem; }
   .card summary {
     margin: 0 0 0.6rem; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em;
-    color: #999; font-weight: 600; cursor: pointer; padding: 0.3rem 0;
+    color: var(--muted); font-weight: 600; cursor: pointer; padding: 0.3rem 0;
     touch-action: manipulation; -webkit-tap-highlight-color: transparent;
   }
   .card:not([open]) summary { margin-bottom: 0; }
@@ -301,38 +330,52 @@ _PAGE = """<!doctype html>
   .wizard-list { margin: 0 0 0.8rem; padding-left: 1.3rem; }
   .wizard-list:empty { margin: 0; }
   .wizard-list li { margin-bottom: 0.5rem; line-height: 1.35; }
-  .row { display: flex; justify-content: space-between; align-items: center; padding: 0.45rem 0; border-bottom: 1px solid #333; font-size: 1rem; }
+  .row { display: flex; justify-content: space-between; align-items: center; padding: 0.45rem 0; border-bottom: 1px solid var(--border); font-size: 1rem; }
   .row:last-child { border-bottom: none; }
   .badge { font-weight: bold; padding: 0.1rem 0.6rem; border-radius: 4px; }
-  .badge.parked { background: #7a4a12; }
-  .badge.not-parked { background: #444; }
-  .badge.connected { background: #1a5c34; }
-  .badge.disconnected { background: #5c1a1a; }
-  .badge.tracking { background: #1a5c34; }
-  .badge.not-tracking { background: #444; }
+  .badge.parked { background: var(--badge-parked); }
+  .badge.not-parked { background: var(--badge-neutral); }
+  .badge.connected { background: var(--badge-good); }
+  .badge.disconnected { background: var(--badge-bad); }
+  .badge.tracking { background: var(--badge-good); }
+  .badge.not-tracking { background: var(--badge-neutral); }
   .button-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.6rem; margin-bottom: 0.6rem; }
   .button-row:last-of-type { margin-bottom: 0; }
   button, .button-row a {
-    background: #2a6b3f; border: none; color: white; padding: 0.9rem 1rem; border-radius: 8px;
+    background: var(--btn-bg); border: none; color: var(--btn-text); padding: 0.9rem 1rem; border-radius: 8px;
     cursor: pointer; font-size: 1rem; font-weight: 600; min-height: 3.25rem;
     touch-action: manipulation; -webkit-tap-highlight-color: transparent;
     transition: background-color 0.1s ease, transform 0.1s ease;
     display: flex; align-items: center; justify-content: center; text-decoration: none;
   }
-  button:active, .button-row a:active { background: #1f5030; transform: scale(0.96); }
-  button.danger { background: #6b2a2a; }
-  button.danger:active { background: #4f1f1f; }
+  button:active, .button-row a:active { background: var(--btn-active-bg); transform: scale(0.96); }
+  button.danger { background: var(--btn-danger-bg); }
+  button.danger:active { background: var(--btn-danger-active-bg); }
   button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
-  #message { color: #999; font-size: 0.9rem; margin-top: 0.6rem; min-height: 1.2em; }
+  #message { color: var(--muted); font-size: 0.9rem; margin-top: 0.6rem; min-height: 1.2em; }
   #log-output {
-    background: #111; border-radius: 6px; padding: 0.6rem; margin: 0;
-    font-family: ui-monospace, monospace; font-size: 0.75rem; line-height: 1.4; color: #ccc;
+    background: var(--log-bg); border-radius: 6px; padding: 0.6rem; margin: 0;
+    font-family: ui-monospace, monospace; font-size: 0.75rem; line-height: 1.4; color: var(--log-text);
     white-space: pre-wrap; word-break: break-all; max-height: 40vh; overflow-y: auto;
   }
 </style>
+<script>
+// Runs before <body> parses so the stored theme paints on the first frame
+// instead of flashing full-brightness then switching to red.
+(function() {
+  try {
+    if (localStorage.getItem('cedar-goto-night-mode') === '1') {
+      document.documentElement.classList.add('night');
+    }
+  } catch (e) {}
+})();
+</script>
 </head>
 <body>
-<h1>cedar-goto</h1>
+<div class="header-row">
+  <h1>cedar-goto</h1>
+  <button id="night-toggle" onclick="toggleNightMode()" aria-label="Toggle night vision mode">🌙</button>
+</div>
 <details class="card" id="wizard-card">
   <summary>Setup wizard</summary>
   <h3 id="wizard-title"></h3>
@@ -396,6 +439,19 @@ _PAGE = """<!doctype html>
 <div id="message"></div>
 <script>
 const CEDAR_UI_LINK = __CEDAR_UI_LINK__;
+const NIGHT_MODE_KEY = 'cedar-goto-night-mode';
+function renderNightToggle() {
+  const on = document.documentElement.classList.contains('night');
+  const btn = document.getElementById('night-toggle');
+  btn.textContent = on ? '🔴' : '🌙';
+  btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+}
+function toggleNightMode() {
+  const on = document.documentElement.classList.toggle('night');
+  try { localStorage.setItem(NIGHT_MODE_KEY, on ? '1' : '0'); } catch (e) {}
+  renderNightToggle();
+}
+renderNightToggle();
 const WIZARD_STEPS = [
   {
     title: 'Start of session',
