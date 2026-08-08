@@ -7,6 +7,7 @@ Wants=network-online.target
 Type=simple
 User=cedar-goto
 WorkingDirectory=/opt/cedar-goto
+Environment=PYTHONUNBUFFERED=1
 ExecStart=/opt/cedar-goto/.venv/bin/python -m cedar_goto --config /opt/cedar-goto/config.toml
 Restart=on-failure
 RestartSec=5
