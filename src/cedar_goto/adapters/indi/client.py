@@ -22,12 +22,37 @@ Two consequences here:
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import threading
+import time
 
 logger = logging.getLogger(__name__)
 
 _TELESCOPE_PARK = "TELESCOPE_PARK"
+
+# SkySafari's own request timeout is 3s, but its UI thread blocks on that
+# wait (2026-08 field observation) -- anything the mount takes over ~1s to
+# answer already reads as lag on the phone, well before SkySafari's timeout
+# would fire and before this shows up as an error anywhere. Warn on it so a
+# slow-but-succeeding INDI round-trip leaves a trace instead of nothing.
+_SLOW_CALL_THRESHOLD_S = 1.0
+
+
+def _log_slow_calls(fn):
+    @functools.wraps(fn)
+    async def wrapper(self, *args, **kwargs):
+        start = time.monotonic()
+        try:
+            return await fn(self, *args, **kwargs)
+        finally:
+            elapsed = time.monotonic() - start
+            if elapsed > _SLOW_CALL_THRESHOLD_S:
+                logger.warning(
+                    "IndiConnection.%s%r took %.2fs (device=%r)",
+                    fn.__name__, args, elapsed, self._device_name,
+                )
+    return wrapper
 
 
 class IndiConnectionError(Exception):
@@ -109,6 +134,7 @@ class IndiConnection:
                 event = self._ready_events[key] = asyncio.Event()
             return event
 
+    @_log_slow_calls
     async def ensure_connected(self) -> None:
         """Idempotent -- safe to call at the top of every public method."""
         if self._connected:
@@ -170,11 +196,13 @@ class IndiConnection:
     def _device(self):
         return self._client.getDevice(self._device_name)
 
+    @_log_slow_calls
     async def get_numbers(self, prop: str) -> dict[str, float]:
         await self.wait_for_property(prop)
         vec = self._device().getNumber(prop)
         return {vec[i].getName(): vec[i].getValue() for i in range(len(vec))}
 
+    @_log_slow_calls
     async def get_switch(self, prop: str, elem: str) -> bool:
         await self.wait_for_property(prop)
         widget = self._device().getSwitch(prop).findWidgetByName(elem)
@@ -182,6 +210,7 @@ class IndiConnection:
             raise IndiConnectionError(f"{prop}.{elem} has no such element")
         return widget.getState() == self._PyIndi.ISS_ON
 
+    @_log_slow_calls
     async def get_switch_selection(self, prop: str) -> str | None:
         """Name of the currently-On element of a one-of-many switch vector
         (e.g. TELESCOPE_SLEW_RATE), or None if none is On."""
@@ -192,10 +221,12 @@ class IndiConnection:
                 return vec[i].getName()
         return None
 
+    @_log_slow_calls
     async def is_property_busy(self, prop: str) -> bool:
         await self.wait_for_property(prop)
         return self._device().getPropertyState(prop) == self._PyIndi.IPS_BUSY
 
+    @_log_slow_calls
     async def set_switch(self, prop: str, elem: str) -> None:
         """One-of-many switch vector: reset all elements, turn `elem` on, send.
         Also correct for single-element vectors (e.g. TELESCOPE_ABORT_MOTION)
@@ -212,6 +243,7 @@ class IndiConnection:
         widget.setState(self._PyIndi.ISS_ON)
         self._client.sendNewSwitch(vec)
 
+    @_log_slow_calls
     async def clear_switch(self, prop: str) -> None:
         """Resets a one-of-many switch vector to all-off and sends it --
         used to stop a momentary jog (TELESCOPE_MOTION_NS/WE) without
@@ -224,6 +256,7 @@ class IndiConnection:
         vec.reset()
         self._client.sendNewSwitch(vec)
 
+    @_log_slow_calls
     async def wait_for_switch_confirmed(self, prop: str, elem: str, timeout_s: float = 3.0) -> None:
         """Poll until the driver's own echo confirms `elem` is On.
 
@@ -250,6 +283,7 @@ class IndiConnection:
             if loop.time() > deadline:
                 raise IndiConnectionError(f"{prop}.{elem} was not confirmed On (timed out)")
 
+    @_log_slow_calls
     async def set_numbers(self, prop: str, values: dict[str, float]) -> None:
         await self.wait_for_property(prop)
         await asyncio.to_thread(self._set_numbers_sync, prop, values)
