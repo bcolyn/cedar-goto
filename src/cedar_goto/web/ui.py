@@ -27,6 +27,7 @@ from cedar_goto.web.alpaca_spec import ALL_MEMBERS_BY_ACTION
 from cedar_goto.web.cedar_backend import SyncRefused
 from cedar_goto.web.cedar_service import cedar_systemctl
 from cedar_goto.web.log_buffer import recent_lines
+from cedar_goto.web.system_service import shutdown_host
 
 router = APIRouter()
 
@@ -256,6 +257,12 @@ async def action_cedar_stop(request: Request) -> JSONResponse:
     return JSONResponse({"ok": ok, "message": message})
 
 
+@router.post("/api/ui/actions/shutdown-host")
+async def action_shutdown_host() -> JSONResponse:
+    ok, message = await shutdown_host()
+    return JSONResponse({"ok": ok, "message": message})
+
+
 @router.post("/api/ui/actions/sync-to-target")
 async def action_sync_to_target(request: Request) -> JSONResponse:
     target = await request.app.state.telescope_backend.sync_to_target()
@@ -435,6 +442,12 @@ _PAGE = """<!doctype html>
     <button onclick="refreshLog()">Refresh log</button>
   </div>
   <pre id="log-output">–</pre>
+</details>
+<details class="card">
+  <summary>System</summary>
+  <div class="button-row">
+    <button class="danger" onclick="shutdownHost(this)">⏻ Shut down Pi</button>
+  </div>
 </details>
 <div id="message"></div>
 <script>
@@ -694,6 +707,11 @@ async function post(url, btn) {
 function clearSyncPoints(btn) {
   if (confirm('Clear all mount sync points? This cannot be undone.')) {
     post('/api/ui/actions/clear-sync-points', btn);
+  }
+}
+function shutdownHost(btn) {
+  if (confirm('Shut down the Raspberry Pi running cedar-goto? This ends your session immediately.')) {
+    post('/api/ui/actions/shutdown-host', btn);
   }
 }
 async function refreshLog() {

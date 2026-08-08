@@ -117,6 +117,20 @@ async def test_cedar_start_stop_call_systemctl_when_same_host():
         mock_systemctl.assert_awaited_once_with("start")
 
 
+async def test_shutdown_host_calls_systemctl():
+    from unittest.mock import AsyncMock, patch
+
+    async with make_client(World()) as client:
+        with patch(
+            "cedar_goto.web.ui.shutdown_host", AsyncMock(return_value=(True, "shutting down"))
+        ) as mock_shutdown:
+            resp = await client.post("/api/ui/actions/shutdown-host")
+        body = resp.json()
+        assert body["ok"] is True
+        assert body["message"] == "shutting down"
+        mock_shutdown.assert_awaited_once_with()
+
+
 async def test_status_reflects_connected_and_solve():
     world = World(error_model=HarmonicErrorModel())
     async with make_client(world) as client:

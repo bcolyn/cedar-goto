@@ -198,6 +198,11 @@ meant to be used from a phone.
   `sudo systemctl start/stop cedar` locally -- see "Start/stop cedar-server"
   below for the sudoers setup this needs. Hidden entirely (and refused
   server-side even if called directly) otherwise.
+- **System** -- one action, **Shut down Pi**, which shells out to `sudo
+  systemctl poweroff` on the box cedar-goto itself is running on (always
+  local, unlike cedar-server above -- there's no host to detect). Prompts
+  for confirmation before sending. See "Shut down the host" below for the
+  sudoers setup this needs.
 
 **Sync mount to target** is the one to reach for while aligning (see
 [Field workflow](#field-workflow-on-sky)): it syncs to the coordinate you
@@ -305,6 +310,23 @@ Without this, the buttons fail cleanly with whatever `sudo`/`systemctl`
 printed (typically "sudo: a password is required") rather than hanging --
 `cedar_service.cedar_systemctl()` runs with stdin closed and a timeout, so
 a missing NOPASSWD entry can't leave a request stuck.
+
+### Shut down the host
+
+The web UI's **Shut down Pi** button (System panel) shells out to `sudo
+systemctl poweroff` on the box cedar-goto itself is running on. Same deal
+as above: needs **passwordless sudo** for exactly this command, which
+`install.sh` does not set up automatically. Add a sudoers drop-in:
+
+```sh
+echo 'cedar-goto ALL=(ALL) NOPASSWD: /usr/bin/systemctl poweroff' \
+  | sudo tee /etc/sudoers.d/cedar-goto-shutdown
+sudo visudo -c   # validate the file before trusting it
+```
+
+Without this, the button fails cleanly the same way the cedar-server
+buttons do -- `system_service.shutdown_host()` runs with stdin closed and
+a timeout, so a missing NOPASSWD entry can't leave a request stuck.
 
 ## Regenerating gRPC stubs
 
