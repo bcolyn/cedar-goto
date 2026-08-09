@@ -346,6 +346,8 @@ _PAGE = """<!doctype html>
   .badge.disconnected { background: var(--badge-bad); }
   .badge.tracking { background: var(--badge-good); }
   .badge.not-tracking { background: var(--badge-neutral); }
+  .badge.solving { background: var(--badge-good); }
+  .badge.stale { background: var(--badge-bad); }
   .button-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.6rem; margin-bottom: 0.6rem; }
   .button-row:last-of-type { margin-bottom: 0; }
   button, .button-row a {
@@ -425,7 +427,7 @@ _PAGE = """<!doctype html>
   <summary>Cedar</summary>
   <div class="row"><span>Status</span><span id="cedar-status" class="badge">–</span></div>
   <div class="row"><span>Last solve</span><span id="solve">–</span></div>
-  <div class="row"><span>Received</span><span id="solve-age">–</span></div>
+  <div class="row"><span>Solving</span><span id="solve-age" class="badge">–</span></div>
   <div class="row"><span>Error (alt/az)</span><span id="cedar-error">–</span></div>
   <div class="button-row">
     <button onclick="post('/api/ui/actions/sync-now', this)">✓ Sync mount to cedar</button>
@@ -610,7 +612,7 @@ function renderStatus(s) {
   document.getElementById('solve').textContent = s.last_solve
     ? formatHMS(s.last_solve.sky_coord.ra_deg) + ' ' + formatDMS(s.last_solve.sky_coord.dec_deg)
     : '–';
-  document.getElementById('solve-age').textContent = (s.solve_age_s != null) ? formatAge(s.solve_age_s) : '–';
+  renderSolveAge(s);
   document.getElementById('cedar-error').textContent = s.cedar_error
     ? 'alt ' + formatSignedArcmin(s.cedar_error.alt_arcmin) + ' / az ' + formatSignedArcmin(s.cedar_error.az_arcmin)
     : '–';
@@ -672,6 +674,29 @@ function formatDMS(decDeg) {
   const m = Math.floor(totalMinutes);
   const s = (totalMinutes - m) * 60;
   return sign + d + "° " + String(m).padStart(2, '0') + "' " + s.toFixed(0) + '"';
+}
+function renderSolveAge(s) {
+  // cedar solves at roughly 1 Hz on real hardware (see cedar_backend.py's
+  // _cached_cedar_position docstring), so a per-second "Xs ago" counter is
+  // almost always ~0 and never tells you anything -- it can't distinguish
+  // "healthy" from "cedar stopped solving 2 minutes ago". Collapse the
+  // healthy range into a steady badge instead, and only surface elapsed
+  // time once it's actually stale -- same max_solve_age_s threshold
+  // _cedar_position() uses to decide a solve is too old to trust.
+  const el = document.getElementById('solve-age');
+  if (s.solve_age_s == null) {
+    el.textContent = '–';
+    el.className = 'badge';
+    return;
+  }
+  const staleAfter = (s.max_solve_age_s != null) ? s.max_solve_age_s : 5;
+  if (s.solve_age_s <= staleAfter) {
+    el.textContent = 'solving';
+    el.className = 'badge solving';
+  } else {
+    el.textContent = formatAge(s.solve_age_s);
+    el.className = 'badge stale';
+  }
 }
 function formatAge(totalSeconds) {
   const s = Math.floor(totalSeconds);

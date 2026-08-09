@@ -213,6 +213,10 @@ class CedarTelescopeBackend:
         result: dict = {
             "last_target": _coord_dict(self._last_target) if self._last_target else None,
             "last_target_time_unix": self._last_target_time_unix,
+            # Same threshold _cedar_position() uses to decide a solve is too
+            # old to trust for reported position -- reused by the dashboard
+            # so "stale" means the same thing in both places.
+            "max_solve_age_s": self._position_config.max_solve_age_s,
         }
         try:
             solve = await self._cedar.get_latest_solve()
