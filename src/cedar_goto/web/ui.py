@@ -361,7 +361,22 @@ _PAGE = """<!doctype html>
   button.danger { background: var(--btn-danger-bg); }
   button.danger:active { background: var(--btn-danger-active-bg); }
   button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
-  #message { color: var(--muted); font-size: 0.9rem; margin-top: 0.6rem; min-height: 1.2em; }
+  /* Fixed toast, not an inline status line -- action buttons live all over
+     the page (e.g. "Sync mount to cedar" near the top), so a result docked
+     after the last card was routinely scrolled off and missed. Pinning it
+     to the viewport means it's visible no matter which button triggered
+     it, without needing to scroll. */
+  #message {
+    position: fixed; top: 0.75rem; left: 1rem; right: 1rem; z-index: 1000;
+    max-width: 640px; margin: 0 auto; text-align: center;
+    background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px;
+    padding: 0.6rem 1rem; font-size: 0.9rem; color: var(--text);
+    box-shadow: 0 2px 10px rgba(0,0,0,0.4);
+    opacity: 0; pointer-events: none; transition: opacity 0.25s ease;
+  }
+  #message.show { opacity: 1; }
+  #message.ok { border-color: var(--badge-good); }
+  #message.fail { border-color: var(--badge-bad); }
   #log-output {
     background: var(--log-bg); border-radius: 6px; padding: 0.6rem; margin: 0;
     font-family: ui-monospace, monospace; font-size: 0.75rem; line-height: 1.4; color: var(--log-text);
@@ -714,12 +729,20 @@ function formatSignedArcmin(arcmin) {
   const sign = arcmin >= 0 ? '+' : '-';
   return sign + Math.abs(arcmin).toFixed(1) + "'";
 }
+let messageTimer = null;
+function showMessage(text, ok) {
+  const el = document.getElementById('message');
+  el.textContent = text;
+  el.className = 'show ' + (ok ? 'ok' : 'fail');
+  clearTimeout(messageTimer);
+  messageTimer = setTimeout(() => { el.className = ''; }, 5000);
+}
 async function post(url, btn) {
   if (btn) btn.disabled = true;
   try {
     const r = await fetch(url, {method: 'POST'});
     const body = await r.json();
-    document.getElementById('message').textContent = body.message || (body.ok ? 'OK' : 'failed');
+    showMessage(body.message || (body.ok ? 'OK' : 'failed'), body.ok);
   } finally {
     if (btn) btn.disabled = false;
     // Actions like park and cedar-start only *command* something that
